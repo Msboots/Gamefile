@@ -1,5 +1,6 @@
 import pygame
 import random
+import math
 from config import *
 
 class Gem:
@@ -27,8 +28,8 @@ class Gem:
         self.image = pygame.transform.scale(self.original_image, (CELL_SIZE - 4, CELL_SIZE - 4))
         
         self.rect = pygame.Rect(
-            GRID_OFFSET_X + x * CELL_SIZE + 2,
-            GRID_OFFSET_Y + y * CELL_SIZE + 2,
+            FIELD_DRAW_OFFSET_X + FIELD_INNER_PADDING + x * CELL_SIZE + 2,
+            FIELD_DRAW_OFFSET_Y + FIELD_INNER_PADDING + y * CELL_SIZE + 2,
             CELL_SIZE - 4,
             CELL_SIZE - 4
         )
@@ -42,28 +43,50 @@ class Gem:
         self.move_start_time = 0
         self.return_start_time = 0
         self.scale = 1.0
+        self.pulse_time = 0  # Таймер для пульсации
+        self.shake_time = 0  # Таймер дрожания
+        self.is_shaking = False
+        self.shake_direction = 1
 
-    def draw(self, screen):
-        # Если гем в процессе анимации, применяем масштабирование
-        if (self.is_moving or self.is_returning) and self.scale != 1.0:
-            scaled_size = (int((CELL_SIZE - 4) * self.scale), int((CELL_SIZE - 4) * self.scale))
-            scaled_image = pygame.transform.scale(self.image, scaled_size)
-            
-            # Центрируем масштабированное изображение
-            offset_x = (CELL_SIZE - 4 - scaled_size[0]) // 2
-            offset_y = (CELL_SIZE - 4 - scaled_size[1]) // 2
-            
-        # Рисуем гем
-            screen.blit(scaled_image, (self.rect.x + offset_x, self.rect.y + offset_y))
-        else:
-            # Рисуем гем без масштабирования
-            screen.blit(self.image, self.rect)
-        
-        # Если гем выбран, рисуем рамку
+    def draw(self, screen, offset_x=0, offset_y=0):
+        # Анимация дрожания
+        shake_offset = 0
+        if self.is_shaking:
+            shake_offset = int(4 * math.sin(self.shake_time * 30) * self.shake_direction)
+        # Анимация пульсации для выделенного гема
         if self.is_selected:
-            pygame.draw.rect(screen, COLORS['WHITE'], self.rect, 2)
+            scale = 1.17 + 0.08 * math.sin(self.pulse_time)
+        elif (self.is_moving or self.is_returning) and self.scale != 1.0:
+            scale = self.scale
+        else:
+            scale = 1.0
+
+        draw_x = self.rect.x + offset_x + shake_offset
+        draw_y = self.rect.y + offset_y
+
+        if scale != 1.0:
+            scaled_size = (int((CELL_SIZE - 4) * scale), int((CELL_SIZE - 4) * scale))
+            scaled_image = pygame.transform.scale(self.image, scaled_size)
+            offset_x_img = (CELL_SIZE - 4 - scaled_size[0]) // 2
+            offset_y_img = (CELL_SIZE - 4 - scaled_size[1]) // 2
+            screen.blit(scaled_image, (draw_x + offset_x_img, draw_y + offset_y_img))
+        else:
+            screen.blit(self.image, (draw_x, draw_y))
+        
+        # Убрана рамка выделения
 
     def update(self, dt):
+        # Обновляем таймер пульсации
+        if self.is_selected:
+            self.pulse_time += dt * 6  # Скорость пульсации
+        else:
+            self.pulse_time = 0
+        # Обновляем дрожание
+        if self.is_shaking:
+            self.shake_time += dt
+            if self.shake_time > 0.25:
+                self.is_shaking = False
+                self.shake_time = 0
         if self.is_moving or self.is_returning:
             if self.is_moving:
                 progress = min(1.0, (pygame.time.get_ticks() - self.move_start_time) / MOVE_DURATION)
@@ -82,8 +105,8 @@ class Gem:
             progress = self.ease_in_out(progress)
             
             # Обновляем позицию
-            self.rect.x = GRID_OFFSET_X + (start_x + (end_x - start_x) * progress) * CELL_SIZE + 2
-            self.rect.y = GRID_OFFSET_Y + (start_y + (end_y - start_y) * progress) * CELL_SIZE + 2
+            self.rect.x = FIELD_DRAW_OFFSET_X + FIELD_INNER_PADDING + (start_x + (end_x - start_x) * progress) * CELL_SIZE + 2
+            self.rect.y = FIELD_DRAW_OFFSET_Y + FIELD_INNER_PADDING + (start_y + (end_y - start_y) * progress) * CELL_SIZE + 2
             
             # Обновляем масштаб для эффекта анимации
             self.scale = 1.0 + 0.1 * (1 - abs(progress - 0.5) * 2)
@@ -98,8 +121,8 @@ class Gem:
                     self.is_returning = False
                     self.x = self.original_x
                     self.y = self.original_y
-                    self.rect.x = GRID_OFFSET_X + self.x * CELL_SIZE + 2
-                    self.rect.y = GRID_OFFSET_Y + self.y * CELL_SIZE + 2
+                    self.rect.x = FIELD_DRAW_OFFSET_X + FIELD_INNER_PADDING + self.x * CELL_SIZE + 2
+                    self.rect.y = FIELD_DRAW_OFFSET_Y + FIELD_INNER_PADDING + self.y * CELL_SIZE + 2
                 self.scale = 1.0  # Сбрасываем масштаб
 
     def ease_in_out(self, t):
@@ -166,7 +189,7 @@ class Gem:
             self.crit_chance += 0.05
         elif stat == 'crit_multiplier':
             self.crit_multiplier += 0.5
-        self.level += 1
+        self.level += 1 
 
     def move_to_position(self, pos_x, pos_y):
         self.is_moving = True
@@ -176,3 +199,8 @@ class Gem:
         self.original_y = self.y
         self.move_start_time = pygame.time.get_ticks()
         # Не меняем self.x/self.y, чтобы не сбивать сетку 
+
+    def start_shake(self):
+        self.is_shaking = True
+        self.shake_time = 0
+        self.shake_direction = random.choice([-1, 1]) 

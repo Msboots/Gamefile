@@ -33,6 +33,7 @@ class Game:
             self.damage_popup_time = 0
             self.damage_popup_value = 0
             self.npc_hit_time = None  # Для анимации получения урона
+            self.last_swap_target = None  # <-- координата последнего хода
             
             # Загружаем фоновое изображение всего окна
             bg_path = os.path.join("images", "bg1-1.jpg")
@@ -121,10 +122,16 @@ class Game:
             pygame.display.flip()
             return
         
-        # --- Красивая рамка и фон поля ---
+        # --- Верхняя панель с монетами и ходами ---
+        top_panel_h = 60
+        top_panel_margin = 30  # увеличенный отступ сверху
+        top_panel_rect = pygame.Rect(GRID_OFFSET_X - 15, top_panel_margin, GRID_SIZE * CELL_SIZE + 30, top_panel_h)
+        total_top_offset = top_panel_margin + top_panel_h + 10  # 10px дополнительный отступ
+
+        # Смещаем игровое поле и все элементы вниз
         field_rect = pygame.Rect(
             GRID_OFFSET_X - 15,
-            GRID_OFFSET_Y - 15,
+            total_top_offset + GRID_OFFSET_Y - 15,
             GRID_SIZE * CELL_SIZE + 30,
             GRID_SIZE * CELL_SIZE + 30
         )
@@ -137,6 +144,93 @@ class Game:
         # Рамка
         pygame.draw.rect(self.screen, COLORS['WHITE'], field_rect, 4, border_radius=18)
         
+        # --- HUD панель справа ---
+        hud_width = 220
+        hud_height = GRID_SIZE * CELL_SIZE + 30
+        hud_x = field_rect.right + 20
+        hud_y = field_rect.top
+        hud_rect = pygame.Rect(hud_x, hud_y, hud_width, hud_height)
+        # Тень HUD
+        hud_shadow = hud_rect.move(6, 6)
+        pygame.draw.rect(self.screen, (0,0,0,80), hud_shadow, border_radius=22)
+        # Полупрозрачная панель
+        hud_surface = pygame.Surface((hud_width, hud_height), pygame.SRCALPHA)
+        pygame.draw.rect(hud_surface, (40, 40, 60, 210), hud_surface.get_rect(), border_radius=22)
+        # Декоративный градиент сверху
+        grad = pygame.Surface((hud_width, 60), pygame.SRCALPHA)
+        for i in range(60):
+            alpha = max(0, 120 - i*2)
+            pygame.draw.rect(grad, (255,255,255,alpha), (0,i,hud_width,1))
+        hud_surface.blit(grad, (0,0))
+        self.screen.blit(hud_surface, (hud_x, hud_y))
+        # Светящиеся углы
+        glow = pygame.Surface((40,40), pygame.SRCALPHA)
+        pygame.draw.ellipse(glow, (120,200,255,60), (0,0,40,40))
+        self.screen.blit(glow, (hud_x-10, hud_y-10))
+        self.screen.blit(glow, (hud_x+hud_width-30, hud_y-10))
+        self.screen.blit(glow, (hud_x-10, hud_y+hud_height-30))
+        self.screen.blit(glow, (hud_x+hud_width-30, hud_y+hud_height-30))
+        # --- Верхняя панель с монетами и ходами ---
+        top_panel_h = 60
+        top_panel_margin = 30  # увеличенный отступ сверху
+        top_panel_rect = pygame.Rect(field_rect.left, top_panel_margin, field_rect.width, top_panel_h)
+        # Тень
+        top_panel_shadow = top_panel_rect.move(0, 6)
+        border_radius_top = 18
+        pygame.draw.rect(self.screen, (0,0,0,80), top_panel_shadow, border_radius=border_radius_top)
+        # Полупрозрачная панель
+        top_panel_surface = pygame.Surface((top_panel_rect.width, top_panel_rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(top_panel_surface, (40, 40, 60, 210), top_panel_surface.get_rect(), border_radius=border_radius_top)
+        grad = pygame.Surface((top_panel_rect.width, 30), pygame.SRCALPHA)
+        for i in range(30):
+            alpha = max(0, 100 - i*3)
+            pygame.draw.rect(grad, (255,255,255,alpha), (0,i,top_panel_rect.width,1))
+        # Маска для скругления градиента
+        grad_mask = pygame.Surface((top_panel_rect.width, 30), pygame.SRCALPHA)
+        pygame.draw.rect(grad_mask, (255,255,255,255), grad_mask.get_rect(), border_radius=border_radius_top)
+        grad.blit(grad_mask, (0,0), special_flags=pygame.BLEND_RGBA_MIN)
+        top_panel_surface.blit(grad, (0,0))
+        self.screen.blit(top_panel_surface, top_panel_rect.topleft)
+        # Монеты
+        font = pygame.font.Font(None, 38)
+        coin_icon = pygame.Surface((32,32), pygame.SRCALPHA)
+        pygame.draw.circle(coin_icon, COLORS['GOLD'], (16,16), 16)
+        pygame.draw.circle(coin_icon, (255,255,255,80), (16,16), 16, 3)
+        self.screen.blit(coin_icon, (top_panel_rect.left+30, top_panel_rect.top+14))
+        coins_text = font.render(f"{self.coins}", True, COLORS['GOLD'])
+        self.screen.blit(coins_text, (top_panel_rect.left+74, top_panel_rect.top+18))
+        # Ходы
+        moves_text = font.render(f"Ходы: {self.moves_left}", True, COLORS['WHITE'])
+        self.screen.blit(moves_text, (top_panel_rect.left+180, top_panel_rect.top+18))
+        # --- Кнопка магазина справа от поля ---
+        shop_btn_w, shop_btn_h = 160, 48
+        shop_btn_x = hud_x + (hud_width - shop_btn_w)//2
+        shop_btn_y = hud_y + hud_height + 24
+        shop_button = pygame.Rect(shop_btn_x, shop_btn_y, shop_btn_w, shop_btn_h)
+        # Тень
+        shop_shadow = shop_button.move(0, 6)
+        border_radius_shop = 16
+        pygame.draw.rect(self.screen, (0,0,0,80), shop_shadow, border_radius=border_radius_shop)
+        # Красивая кнопка
+        shop_surface = pygame.Surface((shop_btn_w, shop_btn_h), pygame.SRCALPHA)
+        pygame.draw.rect(shop_surface, (60, 60, 90, 220), shop_surface.get_rect(), border_radius=border_radius_shop)
+        grad = pygame.Surface((shop_btn_w, shop_btn_h//2), pygame.SRCALPHA)
+        for i in range(shop_btn_h//2):
+            alpha = max(0, 80 - i*3)
+            pygame.draw.rect(grad, (255,255,255,alpha), (0,i,shop_btn_w,1))
+        # Маска для скругления градиента
+        grad_mask = pygame.Surface((shop_btn_w, shop_btn_h//2), pygame.SRCALPHA)
+        pygame.draw.rect(grad_mask, (255,255,255,255), grad_mask.get_rect(), border_radius=border_radius_shop)
+        grad.blit(grad_mask, (0,0), special_flags=pygame.BLEND_RGBA_MIN)
+        shop_surface.blit(grad, (0,0))
+        self.screen.blit(shop_surface, (shop_btn_x, shop_btn_y))
+        # Текст
+        shop_font = pygame.font.Font(None, 36)
+        shop_text = shop_font.render("Магазин", True, COLORS['WHITE'])
+        self.screen.blit(shop_text, (shop_btn_x + shop_btn_w//2 - shop_text.get_width()//2, shop_btn_y + shop_btn_h//2 - shop_text.get_height()//2))
+        # Обновляю координаты кнопки магазина для handle_click
+        self._shop_button_rect = shop_button
+        # --- Остальной игровой процесс ---
         # --- Гемы с тенью ---
         for y in range(GRID_SIZE):
             for x in range(GRID_SIZE):
@@ -144,76 +238,15 @@ class Game:
                     # Тень под гемом
                     shadow = pygame.Surface((CELL_SIZE-4, CELL_SIZE-4), pygame.SRCALPHA)
                     shadow.fill((0,0,0,80))
-                    sx = GRID_OFFSET_X + x * CELL_SIZE + 4
-                    sy = GRID_OFFSET_Y + y * CELL_SIZE + 8
+                    sx = FIELD_DRAW_OFFSET_X + FIELD_INNER_PADDING + x * CELL_SIZE + 2
+                    sy = FIELD_DRAW_OFFSET_Y + FIELD_INNER_PADDING + y * CELL_SIZE + 8  # тень чуть ниже
                     self.screen.blit(shadow, (sx, sy))
                     # Сам гем
                     self.grid[y][x].draw(self.screen)
         
-        # Рисуем секторную полосу здоровья врага
-        health_bar_x = GRID_OFFSET_X + GRID_SIZE * CELL_SIZE + 50
-        health_bar_y = GRID_OFFSET_Y
-        
-        # Настройки секторной полосы здоровья
-        num_sectors = 10  # Количество секторов
-        sector_width = ENEMY_HEALTH_BAR_WIDTH // num_sectors - 2  # Ширина сектора с учетом отступа
-        sector_height = ENEMY_HEALTH_BAR_HEIGHT
-        sector_spacing = 2  # Минимальный отступ между секторами
-        
-        # Вычисляем количество активных секторов на основе здоровья
-        health_percentage = self.enemy_health / ENEMY_MAX_HEALTH
-        active_sectors = int(health_percentage * num_sectors)
-        
-        # Неоновый зеленый цвет
-        neon_green = (57, 255, 20)
-        glow_green = (57, 255, 20, 100)  # Полупрозрачный для свечения
-        
-        # Рисуем каждый сектор
-        for i in range(num_sectors):
-            x = health_bar_x + i * (sector_width + sector_spacing)
-            
-            # Создаем поверхность для свечения
-            glow_surface = pygame.Surface((sector_width + 8, sector_height + 8), pygame.SRCALPHA)
-            
-            # Рисуем фоновый (темный) сектор
-            sector_rect = pygame.Rect(x, health_bar_y, sector_width, sector_height)
-            pygame.draw.rect(self.screen, COLORS['DARK_GRAY'], sector_rect, border_radius=2)
-            
-            if i < active_sectors:
-                # Рисуем свечение для активного сектора
-                glow_rect = pygame.Rect(4, 4, sector_width, sector_height)
-                pygame.draw.rect(glow_surface, glow_green, glow_rect, border_radius=2)
-                self.screen.blit(glow_surface, (x - 4, health_bar_y - 4))
-                
-                # Рисуем активный сектор
-                pygame.draw.rect(self.screen, neon_green, sector_rect, border_radius=2)
-                # Добавляем белую обводку для большей яркости
-                pygame.draw.rect(self.screen, COLORS['WHITE'], sector_rect, 1, border_radius=2)
-        
-        # Рисуем кнопку магазина в нижнем левом углу
-        font = pygame.font.Font(None, 36)
-        shop_button = pygame.Rect(GRID_OFFSET_X, GRID_OFFSET_Y + GRID_SIZE * CELL_SIZE + 20, 150, 40)
-        pygame.draw.rect(self.screen, COLORS['BLACK'], shop_button)
-        pygame.draw.rect(self.screen, COLORS['WHITE'], shop_button, 2)
-        shop_text = font.render("Магазин", True, COLORS['WHITE'])
-        self.screen.blit(shop_text, (shop_button.centerx - shop_text.get_width() // 2,
-                                    shop_button.centery - shop_text.get_height() // 2))
-        
-        # --- Рисуем монеты и ходы справа от кнопки магазин ---
-        coins_x = shop_button.right + 20
-        coins_y = shop_button.centery - 18
-        coins_text = font.render(f"{self.coins}", True, COLORS['YELLOW'])
-        self.screen.blit(coins_text, (coins_x, coins_y))
-        moves_x = coins_x + coins_text.get_width() + 30
-        moves_text = font.render(f"Ходы: {self.moves_left}", True, COLORS['WHITE'])
-        self.screen.blit(moves_text, (moves_x, coins_y))
-        
-        # Рисуем магазин
-        self.shop.draw(self.screen)
-        
         # Рисуем спрайт персонажа справа от игрового поля
-        npc_x = GRID_OFFSET_X + GRID_SIZE * CELL_SIZE + 50
-        npc_y = GRID_OFFSET_Y
+        npc_x = FIELD_DRAW_OFFSET_X + GRID_SIZE * CELL_SIZE + 50
+        npc_y = FIELD_DRAW_OFFSET_Y
         # --- Эффект урона: только встряска ---
         shake = 0
         
@@ -244,6 +277,23 @@ class Game:
             else:
                 self.damage_popup = None
         
+        # В конце проверяем, нужно ли отобразить меню поверх игры
+        if self.main_menu.visible:
+            self.main_menu.draw(self.screen)
+        
+        # --- Сетка внутри поля ---
+        grid_left = FIELD_DRAW_OFFSET_X + FIELD_INNER_PADDING
+        grid_top = FIELD_DRAW_OFFSET_Y + FIELD_INNER_PADDING
+        grid_size_px = GRID_SIZE * CELL_SIZE
+        grid_color = (255,255,255,30)  # светлая полупрозрачная
+        grid_surface = pygame.Surface((grid_size_px, grid_size_px), pygame.SRCALPHA)
+        for i in range(GRID_SIZE+1):
+            # Вертикальные линии
+            pygame.draw.line(grid_surface, grid_color, (i*CELL_SIZE, 0), (i*CELL_SIZE, grid_size_px), 1)
+            # Горизонтальные линии
+            pygame.draw.line(grid_surface, grid_color, (0, i*CELL_SIZE), (grid_size_px, i*CELL_SIZE), 1)
+        self.screen.blit(grid_surface, (grid_left, grid_top))
+        
         pygame.display.flip()
 
     def handle_click(self, pos):
@@ -261,12 +311,7 @@ class Game:
                     return
         
         # Проверяем клик по кнопке магазина
-        shop_button = pygame.Rect(
-            GRID_OFFSET_X,
-            GRID_OFFSET_Y + GRID_SIZE * CELL_SIZE + 20,
-            150, 40
-        )
-        if shop_button.collidepoint(pos):
+        if self._shop_button_rect.collidepoint(pos):
             self.shop.toggle_visibility()
             return
         
@@ -276,8 +321,10 @@ class Game:
             return
         
         # Обрабатываем клики по игровому полю
+        # Учитываем смещение поля вниз
+        total_top_offset = 30 + 60 + 10  # top_panel_margin + top_panel_h + 10
         x = (pos[0] - GRID_OFFSET_X) // CELL_SIZE
-        y = (pos[1] - GRID_OFFSET_Y) // CELL_SIZE
+        y = (pos[1] - (GRID_OFFSET_Y + total_top_offset)) // CELL_SIZE
         
         if 0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE:
             if self.selected_gem is None:
@@ -293,15 +340,30 @@ class Game:
                     if matches:
                         self.process_matches(matches)
                         self.moves_left -= 1
+                        # Сбросить выделение у всех гемов
+                        for row in self.grid:
+                            for gem in row:
+                                if gem:
+                                    gem.is_selected = False
+                        self.selected_gem = None
                     else:
                         # Если совпадений нет, возвращаем гемы в исходные позиции
                         self.swap_gems(self.selected_gem, (x, y))
                         self.grid[y][x].return_to_original()
                         self.grid[self.selected_gem[1]][self.selected_gem[0]].return_to_original()
-                
-                # Снимаем выделение
-                self.grid[self.selected_gem[1]][self.selected_gem[0]].is_selected = False
-                self.selected_gem = None
+                        # Анимация дрожания для обоих гемов
+                        if self.grid[y][x]:
+                            self.grid[y][x].start_shake()
+                        if self.grid[self.selected_gem[1]][self.selected_gem[0]]:
+                            self.grid[self.selected_gem[1]][self.selected_gem[0]].start_shake()
+                        # Снимаем выделение
+                        self.grid[self.selected_gem[1]][self.selected_gem[0]].is_selected = False
+                        self.selected_gem = None
+                else:
+                    # Если не соседний — выделяем новый гем
+                    self.grid[self.selected_gem[1]][self.selected_gem[0]].is_selected = False
+                    self.selected_gem = (x, y)
+                    self.grid[y][x].is_selected = True
 
     def is_adjacent(self, pos1, pos2):
         return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1]) == 1
@@ -325,6 +387,9 @@ class Game:
         if gem2:
             gem2.x, gem2.y = x1, y1
             gem2.move_to(x1, y1)
+        
+        # Сохраняем координату, куда был совершен ход
+        self.last_swap_target = (x2, y2)
 
     def check_matches(self):
         matches = []
@@ -348,19 +413,23 @@ class Game:
 
         return matches
 
-    def process_matches(self, matches):
+    def process_matches(self, matches, is_player_move=True):
         if not matches:  # Защита от пустого списка
             return
-        
+            
         # --- Анимация сложения ---
+        if is_player_move and self.last_swap_target:
+            # Анимация к целевому гемy хода
+            target_x, target_y = self.last_swap_target
+        else:
+            # Анимация к центру комбинации
+            target_x = sum([x for x, y in matches[0]]) / len(matches[0])
+            target_y = sum([y for x, y in matches[0]]) / len(matches[0])
         for match in matches:
-            # Находим центр комбинации
-            center_x = sum([x for x, y in match]) / len(match)
-            center_y = sum([y for x, y in match]) / len(match)
             for x, y in match:
                 gem = self.grid[y][x]
                 if gem:
-                    gem.move_to_position(center_x, center_y)
+                    gem.move_to_position(target_x, target_y)
         # Ждем завершения анимации
         animation_running = True
         while animation_running:
@@ -381,7 +450,7 @@ class Game:
             self.draw()
             self.clock.tick(60)
         # --- Конец анимации сложения ---
-        
+            
         total_damage = 0
         critical_hits = 0
         
@@ -427,7 +496,7 @@ class Game:
         new_matches = self.check_matches()
         if new_matches:
             print("Найдены новые комбинации после заполнения!")
-            self.process_matches(new_matches)
+            self.process_matches(new_matches, is_player_move=False)
         
         # --- Показываем popup урона ---
         if total_damage > 0:
@@ -519,6 +588,13 @@ class Game:
                     self.handle_click(event.pos)
                 elif event.type == pygame.MOUSEMOTION and self.main_menu.visible:
                     self.main_menu.handle_event(event)
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        if self.game_started and not self.main_menu.visible:
+                            self.save_game()  # Сохраняем игру перед открытием меню
+                            self.main_menu.visible = True
+                        elif self.game_started and self.main_menu.visible:
+                            self.main_menu.visible = False
 
             # Обновляем состояние гемов только если игра начата
             if self.game_started:

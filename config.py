@@ -19,14 +19,18 @@ GEM_IMAGES = {
 GEM_TYPES = list(GEM_IMAGES.keys())
 
 # Размеры окна
-WINDOW_WIDTH = 800
-WINDOW_HEIGHT = 600
+WINDOW_WIDTH = 900
+WINDOW_HEIGHT = 700
 
 # Размеры сетки
 GRID_SIZE = 8
 CELL_SIZE = 50
 GRID_OFFSET_X = 50
 GRID_OFFSET_Y = 50
+
+# Смещение игрового поля для отрисовки (учитывает верхнюю панель)
+FIELD_DRAW_OFFSET_X = GRID_OFFSET_X - 15
+FIELD_DRAW_OFFSET_Y = 30 + 60 + 10 + GRID_OFFSET_Y - 15  # top_panel_margin + top_panel_h + 10 + GRID_OFFSET_Y - 15
 
 # Цвета
 COLORS = {
@@ -102,4 +106,6 @@ GEM_EXPERIENCE = {
 }
 
 # Настройки сохранения
-SAVE_FILE = 'save.json' 
+SAVE_FILE = 'save.json'
+
+FIELD_INNER_PADDING = 15 

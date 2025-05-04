@@ -48,21 +48,24 @@ class MainMenu:
         for button in self.buttons:
             # Рисуем фон кнопки
             color = COLORS['BUTTON_HOVER'] if button == self.selected_button else COLORS['BUTTON']
-            pygame.draw.rect(screen, color, button['rect'], border_radius=15)
-            
-            # Рисуем рамку кнопки
-            pygame.draw.rect(screen, COLORS['WHITE'], button['rect'], 3, border_radius=15)
-            
-            # Добавляем градиент и блик
-            gradient_rect = button['rect'].copy()
-            gradient_surface = pygame.Surface((gradient_rect.width, gradient_rect.height), pygame.SRCALPHA)
-            for i in range(gradient_rect.height // 2):
+            border_radius = 18
+            btn_surf = pygame.Surface((button['rect'].width, button['rect'].height), pygame.SRCALPHA)
+            pygame.draw.rect(btn_surf, color, btn_surf.get_rect(), border_radius=border_radius)
+            # Градиент и блик
+            grad = pygame.Surface((button['rect'].width, button['rect'].height//2), pygame.SRCALPHA)
+            for i in range(button['rect'].height//2):
                 alpha = 100 - (i * 2)
                 if alpha > 0:
-                    pygame.draw.rect(gradient_surface, (255, 255, 255, alpha),
-                                   (0, i, gradient_rect.width, 1))
-            screen.blit(gradient_surface, gradient_rect)
-            
+                    pygame.draw.rect(grad, (255, 255, 255, alpha), (0, i, button['rect'].width, 1))
+            # Маска для скругления градиента
+            grad_mask = pygame.Surface((button['rect'].width, button['rect'].height//2), pygame.SRCALPHA)
+            pygame.draw.rect(grad_mask, (255,255,255,255), grad_mask.get_rect(), border_radius=border_radius)
+            grad.blit(grad_mask, (0,0), special_flags=pygame.BLEND_RGBA_MIN)
+            btn_surf.blit(grad, (0,0))
+            # Рисуем рамку кнопки
+            pygame.draw.rect(btn_surf, COLORS['WHITE'], btn_surf.get_rect(), 3, border_radius=border_radius)
+            # Рисуем на экран
+            screen.blit(btn_surf, button['rect'].topleft)
             # Рисуем текст
             text_surface = self.font.render(button['text'], True, COLORS['WHITE'])
             text_rect = text_surface.get_rect(center=button['rect'].center)
@@ -85,5 +88,9 @@ class MainMenu:
             for button in self.buttons:
                 if button['rect'].collidepoint(event.pos):
                     return button['action']
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.visible = False
+                return 'continue'  # Возвращаемся к игре
         
         return None 
