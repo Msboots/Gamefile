@@ -5,7 +5,6 @@ import os
 from config import *
 from entities.gem import Gem
 from ui.shop import Shop
-from ui.main_menu import MainMenu
 
 class Game:
     def __init__(self):
@@ -27,8 +26,6 @@ class Game:
             self.moves_left = 50
             print(f"Количество ходов: {self.moves_left}")
             self.shop = Shop(self)
-            self.main_menu = MainMenu()  # Создаем главное меню
-            self.game_started = False    # Флаг для отслеживания состояния игры
             self.damage_popup = None
             self.damage_popup_time = 0
             self.damage_popup_value = 0
@@ -114,12 +111,6 @@ class Game:
     def draw(self):
         # Отображаем фоновое изображение
         self.screen.blit(self.background, (0, 0))
-        
-        # Если игра не начата, показываем только меню
-        if not self.game_started:
-            self.main_menu.draw(self.screen)
-            pygame.display.flip()
-            return
         
         # --- Красивая рамка и фон поля ---
         field_rect = pygame.Rect(
@@ -247,13 +238,6 @@ class Game:
         pygame.display.flip()
 
     def handle_click(self, pos):
-        # Если открыто главное меню, обрабатываем его события
-        if self.main_menu.visible:
-            action = self.main_menu.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, {'pos': pos}))
-            if action:
-                self.handle_menu_action(action)
-            return
-        
         # Проверяем, есть ли гемы в процессе анимации
         for y in range(GRID_SIZE):
             for x in range(GRID_SIZE):
@@ -488,24 +472,6 @@ class Game:
             print(f"Ошибка при загрузке сохранения: {e}")
             print("Начинаем новую игру")
 
-    def handle_menu_action(self, action):
-        if action == 'new_game':
-            self.start_new_game()
-        elif action == 'continue':
-            self.load_save()
-            self.main_menu.visible = False
-            self.game_started = True
-        elif action == 'exit':
-            self.running = False
-
-    def start_new_game(self):
-        self.enemy_health = ENEMY_MAX_HEALTH
-        self.coins = 0
-        self.moves_left = 50
-        self.initialize_grid()
-        self.main_menu.visible = False
-        self.game_started = True
-
     def run(self):
         print("Запуск игрового цикла...")
         while self.running:
@@ -517,30 +483,23 @@ class Game:
                     self.running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     self.handle_click(event.pos)
-                elif event.type == pygame.MOUSEMOTION and self.main_menu.visible:
-                    self.main_menu.handle_event(event)
 
-            # Обновляем состояние гемов только если игра начата
-            if self.game_started:
-                for y in range(GRID_SIZE):
-                    for x in range(GRID_SIZE):
-                        if self.grid[y][x]:
-                            self.grid[y][x].update(dt)
+            for y in range(GRID_SIZE):
+                for x in range(GRID_SIZE):
+                    if self.grid[y][x]:
+                        self.grid[y][x].update(dt)
 
             self.draw()
 
-            # Проверяем условие окончания игры только если игра начата
-            if self.game_started:
-                if self.moves_left <= 0:
-                    print("Закончились ходы")
-                    self.save_game()
-                    self.game_started = False
-                    self.main_menu.visible = True
-                elif self.enemy_health <= 0:
-                    print("Враг побежден")
-                    self.save_game()
-                    self.game_started = False
-                    self.main_menu.visible = True
+            # Проверяем условие окончания игры только если есть ходы
+            if self.moves_left <= 0:
+                print("Закончились ходы")
+                self.save_game()
+                self.running = False
+            elif self.enemy_health <= 0:
+                print("Враг побежден")
+                self.save_game()
+                self.running = False
 
         print("Завершение работы...")
         pygame.quit()

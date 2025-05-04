@@ -5,7 +5,6 @@ import os
 from config import *
 from entities.gem import Gem
 from ui.shop import Shop
-from ui.main_menu import MainMenu
 
 class Game:
     def __init__(self):
@@ -27,22 +26,10 @@ class Game:
             self.moves_left = 50
             print(f"Количество ходов: {self.moves_left}")
             self.shop = Shop(self)
-            self.main_menu = MainMenu()  # Создаем главное меню
-            self.game_started = False    # Флаг для отслеживания состояния игры
             self.damage_popup = None
             self.damage_popup_time = 0
             self.damage_popup_value = 0
             self.npc_hit_time = None  # Для анимации получения урона
-            
-            # Загружаем фоновое изображение всего окна
-            bg_path = os.path.join("images", "bg1-1.jpg")
-            if not os.path.exists(bg_path):
-                raise FileNotFoundError(f"Фоновое изображение не найдено: {bg_path}")
-            self.background = pygame.image.load(bg_path).convert()
-            self.background = pygame.transform.smoothscale(self.background, (WINDOW_WIDTH, WINDOW_HEIGHT))
-            
-            # Загружаем фон поля
-            self.field_bg = pygame.image.load(os.path.join("images", "backgraund.png")).convert_alpha()
             
             # Загружаем спрайт персонажа
             npc_sprite_path = os.path.join("images", "npc_g", "NPC-1-1.png")
@@ -112,14 +99,15 @@ class Game:
                 self.grid[y][x] = Gem(x, y, random.choice(available_types))
 
     def draw(self):
-        # Отображаем фоновое изображение
-        self.screen.blit(self.background, (0, 0))
-        
-        # Если игра не начата, показываем только меню
-        if not self.game_started:
-            self.main_menu.draw(self.screen)
-            pygame.display.flip()
-            return
+        # Градиентный фон
+        for y in range(WINDOW_HEIGHT):
+            color_top = (30, 30, 60)
+            color_bottom = (80, 0, 80)
+            ratio = y / WINDOW_HEIGHT
+            r = int(color_top[0] * (1 - ratio) + color_bottom[0] * ratio)
+            g = int(color_top[1] * (1 - ratio) + color_bottom[1] * ratio)
+            b = int(color_top[2] * (1 - ratio) + color_bottom[2] * ratio)
+            pygame.draw.line(self.screen, (r, g, b), (0, y), (WINDOW_WIDTH, y))
         
         # --- Красивая рамка и фон поля ---
         field_rect = pygame.Rect(
@@ -131,11 +119,29 @@ class Game:
         # Тень от поля
         shadow_rect = field_rect.move(8, 8)
         pygame.draw.rect(self.screen, COLORS['SHADOW'], shadow_rect, border_radius=18)
-        # Фон поля — изображение
-        bg_img = pygame.transform.smoothscale(self.field_bg, (field_rect.width, field_rect.height))
-        self.screen.blit(bg_img, field_rect.topleft)
+        # Полупрозрачный фон поля
+        field_surface = pygame.Surface((field_rect.width, field_rect.height), pygame.SRCALPHA)
+        field_surface.fill((60, 30, 80, 220))
+        self.screen.blit(field_surface, field_rect.topleft)
         # Рамка
         pygame.draw.rect(self.screen, COLORS['WHITE'], field_rect, 4, border_radius=18)
+        
+        # --- Сетка ---
+        for y in range(GRID_SIZE + 1):
+            pygame.draw.line(
+                self.screen, 
+                COLORS['LIGHT_GRAY'],
+                (GRID_OFFSET_X, GRID_OFFSET_Y + y * CELL_SIZE),
+                (GRID_OFFSET_X + GRID_SIZE * CELL_SIZE, GRID_OFFSET_Y + y * CELL_SIZE),
+                2
+            )
+            pygame.draw.line(
+                self.screen,
+                COLORS['LIGHT_GRAY'],
+                (GRID_OFFSET_X + y * CELL_SIZE, GRID_OFFSET_Y),
+                (GRID_OFFSET_X + y * CELL_SIZE, GRID_OFFSET_Y + GRID_SIZE * CELL_SIZE),
+                2
+            )
         
         # --- Гемы с тенью ---
         for y in range(GRID_SIZE):
@@ -150,45 +156,16 @@ class Game:
                     # Сам гем
                     self.grid[y][x].draw(self.screen)
         
-        # Рисуем секторную полосу здоровья врага
+        # Рисуем полосу здоровья врага
         health_bar_x = GRID_OFFSET_X + GRID_SIZE * CELL_SIZE + 50
         health_bar_y = GRID_OFFSET_Y
-        
-        # Настройки секторной полосы здоровья
-        num_sectors = 10  # Количество секторов
-        sector_width = ENEMY_HEALTH_BAR_WIDTH // num_sectors - 2  # Ширина сектора с учетом отступа
-        sector_height = ENEMY_HEALTH_BAR_HEIGHT
-        sector_spacing = 2  # Минимальный отступ между секторами
-        
-        # Вычисляем количество активных секторов на основе здоровья
-        health_percentage = self.enemy_health / ENEMY_MAX_HEALTH
-        active_sectors = int(health_percentage * num_sectors)
-        
-        # Неоновый зеленый цвет
-        neon_green = (57, 255, 20)
-        glow_green = (57, 255, 20, 100)  # Полупрозрачный для свечения
-        
-        # Рисуем каждый сектор
-        for i in range(num_sectors):
-            x = health_bar_x + i * (sector_width + sector_spacing)
-            
-            # Создаем поверхность для свечения
-            glow_surface = pygame.Surface((sector_width + 8, sector_height + 8), pygame.SRCALPHA)
-            
-            # Рисуем фоновый (темный) сектор
-            sector_rect = pygame.Rect(x, health_bar_y, sector_width, sector_height)
-            pygame.draw.rect(self.screen, COLORS['DARK_GRAY'], sector_rect, border_radius=2)
-            
-            if i < active_sectors:
-                # Рисуем свечение для активного сектора
-                glow_rect = pygame.Rect(4, 4, sector_width, sector_height)
-                pygame.draw.rect(glow_surface, glow_green, glow_rect, border_radius=2)
-                self.screen.blit(glow_surface, (x - 4, health_bar_y - 4))
-                
-                # Рисуем активный сектор
-                pygame.draw.rect(self.screen, neon_green, sector_rect, border_radius=2)
-                # Добавляем белую обводку для большей яркости
-                pygame.draw.rect(self.screen, COLORS['WHITE'], sector_rect, 1, border_radius=2)
+        pygame.draw.rect(self.screen, COLORS['RED'], 
+                        (health_bar_x, health_bar_y, 
+                         ENEMY_HEALTH_BAR_WIDTH, ENEMY_HEALTH_BAR_HEIGHT))
+        current_health_width = (self.enemy_health / ENEMY_MAX_HEALTH) * ENEMY_HEALTH_BAR_WIDTH
+        pygame.draw.rect(self.screen, COLORS['GREEN'], 
+                        (health_bar_x, health_bar_y, 
+                         current_health_width, ENEMY_HEALTH_BAR_HEIGHT))
         
         # Рисуем кнопку магазина в нижнем левом углу
         font = pygame.font.Font(None, 36)
@@ -214,23 +191,17 @@ class Game:
         # Рисуем спрайт персонажа справа от игрового поля
         npc_x = GRID_OFFSET_X + GRID_SIZE * CELL_SIZE + 50
         npc_y = GRID_OFFSET_Y
-        # --- Эффект урона: только встряска ---
+        # --- Эффекты урона: встряска и мигание ---
         shake = 0
-        
-        if self.npc_hit_time:
-            current_time = pygame.time.get_ticks()
-            hit_duration = 200  # Длительность эффекта в мс
-            elapsed = current_time - self.npc_hit_time
-            
-            if elapsed < hit_duration:
-                # Встряска с затуханием
-                intensity = 1 - (elapsed / hit_duration)
-                shake = int(8 * intensity) * random.choice([-1, 1])
-            else:
-                self.npc_hit_time = None
-        
-        # Отрисовка персонажа только со встряской
-        self.screen.blit(self.npc_image, (npc_x + shake, npc_y))
+        npc_img = self.npc_image
+        if self.npc_hit_time and pygame.time.get_ticks() - self.npc_hit_time < 200:
+            import random
+            shake = random.randint(-8, 8)
+            npc_img = self.npc_image.copy()
+            npc_img.fill((255, 80, 80, 120), special_flags=pygame.BLEND_RGBA_ADD)
+        else:
+            self.npc_hit_time = None
+        self.screen.blit(npc_img, (npc_x + shake, npc_y))
         
         # --- Рисуем popup урона ---
         if self.damage_popup:
@@ -247,13 +218,6 @@ class Game:
         pygame.display.flip()
 
     def handle_click(self, pos):
-        # Если открыто главное меню, обрабатываем его события
-        if self.main_menu.visible:
-            action = self.main_menu.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, {'pos': pos}))
-            if action:
-                self.handle_menu_action(action)
-            return
-        
         # Проверяем, есть ли гемы в процессе анимации
         for y in range(GRID_SIZE):
             for x in range(GRID_SIZE):
@@ -423,7 +387,7 @@ class Game:
         # Обновляем таймеры бонусов
         self.shop.update()
         
-        # Проверяем новые комбинации после заполнения/841
+        # Проверяем новые комбинации после заполнения
         new_matches = self.check_matches()
         if new_matches:
             print("Найдены новые комбинации после заполнения!")
@@ -488,24 +452,6 @@ class Game:
             print(f"Ошибка при загрузке сохранения: {e}")
             print("Начинаем новую игру")
 
-    def handle_menu_action(self, action):
-        if action == 'new_game':
-            self.start_new_game()
-        elif action == 'continue':
-            self.load_save()
-            self.main_menu.visible = False
-            self.game_started = True
-        elif action == 'exit':
-            self.running = False
-
-    def start_new_game(self):
-        self.enemy_health = ENEMY_MAX_HEALTH
-        self.coins = 0
-        self.moves_left = 50
-        self.initialize_grid()
-        self.main_menu.visible = False
-        self.game_started = True
-
     def run(self):
         print("Запуск игрового цикла...")
         while self.running:
@@ -517,30 +463,23 @@ class Game:
                     self.running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     self.handle_click(event.pos)
-                elif event.type == pygame.MOUSEMOTION and self.main_menu.visible:
-                    self.main_menu.handle_event(event)
 
-            # Обновляем состояние гемов только если игра начата
-            if self.game_started:
-                for y in range(GRID_SIZE):
-                    for x in range(GRID_SIZE):
-                        if self.grid[y][x]:
-                            self.grid[y][x].update(dt)
+            for y in range(GRID_SIZE):
+                for x in range(GRID_SIZE):
+                    if self.grid[y][x]:
+                        self.grid[y][x].update(dt)
 
             self.draw()
 
-            # Проверяем условие окончания игры только если игра начата
-            if self.game_started:
-                if self.moves_left <= 0:
-                    print("Закончились ходы")
-                    self.save_game()
-                    self.game_started = False
-                    self.main_menu.visible = True
-                elif self.enemy_health <= 0:
-                    print("Враг побежден")
-                    self.save_game()
-                    self.game_started = False
-                    self.main_menu.visible = True
+            # Проверяем условие окончания игры только если есть ходы
+            if self.moves_left <= 0:
+                print("Закончились ходы")
+                self.save_game()
+                self.running = False
+            elif self.enemy_health <= 0:
+                print("Враг побежден")
+                self.save_game()
+                self.running = False
 
         print("Завершение работы...")
         pygame.quit()
