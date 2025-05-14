@@ -41,6 +41,12 @@ class GameManager:
             self.items_per_page = 6   # Количество предметов на странице
             self.active_bonuses = []  # Активные бонусы с оставшейся длительностью
             
+            # Для хранения прямоугольников бафов для обработки наведения мыши
+            self._buff_rects = []
+            # Для хранения текущей активной подсказки
+            self._active_tooltip = None
+            self._tooltip_time = 0
+
             # Загружаем кнопку для инвентаря
             button_path = os.path.join("images", "button_invert.png")
             if os.path.exists(button_path):
@@ -128,6 +134,13 @@ class GameManager:
             self.pending_matches = []  # Очередь комбинаций для обработки
             self.is_processing_matches = False  # Флаг обработки комбинаций
             self.waiting_for_animations = False  # Флаг ожидания завершения анимаций
+
+            self._show_gem_popup = False
+            self._gem_popup_info = None
+            self._gem_popup_rect = None
+
+            self.essences = {gem_type: 0 for gem_type in GEM_TYPES}  # есенции по типам гемов
+            self.essence_drop_bonus = 0.0  # бонус к шансу дропа есенций (от предмета)
         except Exception as e:
             print(f"Ошибка при инициализации игры: {e}")
             self.running = False
@@ -320,12 +333,17 @@ class GameManager:
                     self.save_game()
                     self.running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    # Проверяем, можно ли делать ход
                     if self.animation_complete:
-                        self.handle_click(event.pos)
+                        # Правый клик мыши по гему
+                        if event.button == 3:
+                            self.handle_right_click(event.pos)
+                        else:
+                            self.handle_click(event.pos)
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        if self.shop.visible:
+                        if self._show_gem_popup:
+                            self._show_gem_popup = False
+                        elif self.shop.visible:
                             self.shop.close()
                         elif getattr(self, '_show_gems_info', False):
                             self._show_gems_info = False
@@ -342,6 +360,8 @@ class GameManager:
                     if event.key == pygame.K_m:
                         self._show_map = not self._show_map
                         continue
+                elif event.type == pygame.MOUSEMOTION:
+                    pass
             # Обновляем состояние гемов только если игра начата
             if self.game_started:
                 for y in range(GRID_SIZE):
@@ -352,6 +372,42 @@ class GameManager:
         print("Завершение работы...")
         self.save_game()
         pygame.quit()
+
+    def handle_right_click(self, pos):
+        # Если уже открыто окно информации о геме, закрываем его по любому клику
+        if self._show_gem_popup:
+            # Проверяем клик по крестику
+            if hasattr(self, '_gem_popup_close_rect') and self._gem_popup_close_rect.collidepoint(pos):
+                self._show_gem_popup = False
+                return
+            if self._gem_popup_rect and not self._gem_popup_rect.collidepoint(pos):
+                self._show_gem_popup = False
+            return
+        # Проверяем, попал ли клик по гему
+        x = (pos[0] - FIELD_OFFSET_X) // CELL_SIZE
+        y = (pos[1] - FIELD_OFFSET_Y) // CELL_SIZE
+        if 0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE:
+            gem = self.grid[y][x]
+            if gem:
+                # Сохраняем информацию о геме для отображения
+                self._show_gem_popup = True
+                self._gem_popup_info = {
+                    'type': gem.type,
+                    'level': gem.level,
+                    'damage': gem.damage,
+                    'crit_chance': gem.crit_chance,
+                    'crit_multiplier': gem.crit_multiplier,
+                    'xp': self.gem_progress[gem.type]['xp'],
+                    'xp_next': int(100 * (1.2 ** (gem.level-1))),
+                    'evolution': self.gem_progress[gem.type]['evolution'],
+                    'evolved_bonus': self.gem_progress[gem.type]['evolved_bonus']
+                }
+                # Сохраняем позицию окна только при открытии
+                popup_w, popup_h = 320, 220
+                popup_x = min(pos[0], WINDOW_WIDTH - popup_w - 10)
+                popup_y = min(pos[1], WINDOW_HEIGHT - popup_h - 10)
+                self._gem_popup_pos = (popup_x, popup_y)
+                # Прямоугольник окна появится при отрисовке
 
     def draw(self):
         # Отображаем фоновое изображение
@@ -380,6 +436,245 @@ class GameManager:
         overlay = pygame.Surface((field_rect.width, field_rect.height), pygame.SRCALPHA)
         pygame.draw.rect(overlay, (40, 40, 60, 120), overlay.get_rect(), border_radius=22)
         self.screen.blit(overlay, field_rect.topleft)
+        
+        # --- Контейнер для бафов и дебафов справа от игрового поля ---
+        buffs_container_width = 42  # Уменьшаем размер контейнера на 30%
+        buffs_container_height = field_rect.height // 2
+        # Изменяем расположение блока с бафами, добавляя отступ от края окна 20 пикселей
+        right_screen_margin = 20
+        buffs_container_x = WINDOW_WIDTH - buffs_container_width - right_screen_margin
+        buffs_container_y = field_rect.top + (field_rect.height - buffs_container_height) // 2
+        
+        # Отображаем бафы только если есть активные бонусы
+        has_active_buffs = False
+        crit_buff_active = False
+        damage_buff_active = False
+        
+        # Проверяем наличие активных бонусов
+        for bonus in self.active_bonuses:
+            if bonus['type'] == 'crit_chance_bonus':
+                crit_buff_active = True
+                has_active_buffs = True
+            elif bonus['type'] == 'damage_bonus':
+                damage_buff_active = True
+                has_active_buffs = True
+        
+        # Очищаем список прямоугольников бафов
+        self._buff_rects = []
+        
+        if has_active_buffs:
+            # Фон контейнера (полностью прозрачный, без рамки)
+            # Отображаем иконки активных бафов
+            icon_size = 28  # Уменьшаем размер иконок на 30%
+            icon_spacing = 10
+            icon_y = icon_spacing
+            
+            # Иконка бафа крита
+            if crit_buff_active:
+                crit_icon = pygame.Surface((icon_size, icon_size), pygame.SRCALPHA)
+                
+                # Создаем круглый фон для иконки
+                pygame.draw.circle(crit_icon, (255, 100, 255, 180), (icon_size//2, icon_size//2), icon_size//2)
+                
+                # Добавляем блик
+                highlight = pygame.Surface((icon_size, icon_size//2), pygame.SRCALPHA)
+                for i in range(icon_size//2):
+                    alpha = max(0, 100 - i*6)
+                    pygame.draw.rect(highlight, (255,255,255,alpha), (0,i,icon_size,1))
+                
+                highlight_mask = pygame.Surface((icon_size, icon_size), pygame.SRCALPHA)
+                pygame.draw.circle(highlight_mask, (255,255,255,255), (icon_size//2, icon_size//2), icon_size//2)
+                highlight.blit(highlight_mask, (0,0), special_flags=pygame.BLEND_RGBA_MIN)
+                crit_icon.blit(highlight, (0,0))
+                
+                # Добавляем символ молнии или восклицательного знака для крита
+                pygame.draw.polygon(crit_icon, (255, 255, 100), [
+                    (icon_size//2, icon_size//5),
+                    (icon_size//2 + icon_size//4, icon_size//2),
+                    (icon_size//2, icon_size//2 + icon_size//8),
+                    (icon_size//2, icon_size*4//5),
+                    (icon_size//2 - icon_size//4, icon_size//2),
+                    (icon_size//2, icon_size//2 - icon_size//8)
+                ])
+                
+                # Добавляем мягкое свечение
+                glow = pygame.Surface((icon_size+12, icon_size+12), pygame.SRCALPHA)
+                glow_color = (255, 100, 255, 12)
+                pygame.draw.circle(glow, glow_color, (glow.get_width()//2, glow.get_height()//2), icon_size//2 + 6)
+                
+                # Находим оставшиеся ходы для баффа крита
+                crit_moves_left = 0
+                crit_duration = 0
+                for bonus in self.active_bonuses:
+                    if bonus['type'] == 'crit_chance_bonus':
+                        crit_moves_left = bonus['duration'] - (bonus['moves'] - self.moves_left)
+                        crit_duration = bonus['duration']
+                        break
+                
+                # Добавляем индикатор оставшегося времени
+                if crit_duration > 0:
+                    # Создаем затемнение в виде секторов для отображения оставшегося времени
+                    overlay = pygame.Surface((icon_size, icon_size), pygame.SRCALPHA)
+                    center = (icon_size//2, icon_size//2)
+                    radius = icon_size//2
+                    
+                    # Вычисляем угол для каждого сектора и закрашиваем истекшие ходы
+                    sector_angle = 360 / crit_duration  # угол на один ход
+                    expired_sectors = crit_duration - crit_moves_left
+                    
+                    if expired_sectors > 0:
+                        start_angle = 0
+                        end_angle = expired_sectors * sector_angle
+                        
+                        # Рисуем затемнение для истекших ходов (полукруг)
+                        for angle in range(int(start_angle), int(end_angle), 1):
+                            rad_angle = math.radians(angle)
+                            x = center[0] + int(radius * math.sin(rad_angle))
+                            y = center[1] - int(radius * math.cos(rad_angle))
+                            pygame.draw.line(overlay, (0, 0, 0, 160), center, (x, y), 1)
+                    
+                    # Применяем маску, чтобы затемнение было только внутри круга
+                    mask = pygame.Surface((icon_size, icon_size), pygame.SRCALPHA)
+                    pygame.draw.circle(mask, (255, 255, 255, 255), center, radius)
+                    overlay.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+                    
+                    # Накладываем затемнение на иконку
+                    crit_icon.blit(overlay, (0, 0))
+                
+                # Располагаем иконку и свечение на экране напрямую
+                glow_x = (buffs_container_width - glow.get_width()) // 2
+                glow_y = icon_y - 6
+                self.screen.blit(glow, (buffs_container_x + glow_x, buffs_container_y + glow_y), special_flags=pygame.BLEND_RGBA_ADD)
+                
+                icon_x = (buffs_container_width - icon_size) // 2
+                self.screen.blit(crit_icon, (buffs_container_x + icon_x, buffs_container_y + icon_y))
+                
+                # Не добавляем рамку вокруг иконки
+                
+                # Сохраняем прямоугольник для обработки наведения мыши
+                crit_buff_info = None
+                for bonus in self.active_bonuses:
+                    if bonus['type'] == 'crit_chance_bonus':
+                        moves_left = bonus['duration'] - (bonus['moves'] - self.moves_left)
+                        crit_buff_info = {
+                            'type': 'crit_chance_bonus',
+                            'value': int(bonus['value'] * 100),
+                            'moves_left': moves_left
+                        }
+                        break
+                
+                crit_buff_rect = pygame.Rect(
+                    buffs_container_x + (buffs_container_width - icon_size) // 2,
+                    buffs_container_y + icon_y,
+                    icon_size,
+                    icon_size
+                )
+                self._buff_rects.append((crit_buff_rect, crit_buff_info))
+                
+                icon_y += icon_size + icon_spacing
+            
+            # Иконка бафа урона
+            if damage_buff_active:
+                damage_icon = pygame.Surface((icon_size, icon_size), pygame.SRCALPHA)
+                
+                # Создаем круглый фон для иконки
+                pygame.draw.circle(damage_icon, (255, 100, 100, 180), (icon_size//2, icon_size//2), icon_size//2)
+                
+                # Добавляем блик
+                highlight = pygame.Surface((icon_size, icon_size//2), pygame.SRCALPHA)
+                for i in range(icon_size//2):
+                    alpha = max(0, 100 - i*6)
+                    pygame.draw.rect(highlight, (255,255,255,alpha), (0,i,icon_size,1))
+                
+                highlight_mask = pygame.Surface((icon_size, icon_size), pygame.SRCALPHA)
+                pygame.draw.circle(highlight_mask, (255,255,255,255), (icon_size//2, icon_size//2), icon_size//2)
+                highlight.blit(highlight_mask, (0,0), special_flags=pygame.BLEND_RGBA_MIN)
+                damage_icon.blit(highlight, (0,0))
+                
+                # Добавляем символ меча для урона
+                pygame.draw.polygon(damage_icon, (255, 200, 100), [
+                    (icon_size//2, icon_size//5),
+                    (icon_size*3//5, icon_size//2),
+                    (icon_size//2, icon_size*4//5),
+                    (icon_size*2//5, icon_size//2)
+                ])
+                
+                # Добавляем мягкое свечение
+                glow = pygame.Surface((icon_size+12, icon_size+12), pygame.SRCALPHA)
+                glow_color = (255, 100, 100, 12)
+                pygame.draw.circle(glow, glow_color, (glow.get_width()//2, glow.get_height()//2), icon_size//2 + 6)
+                
+                # Находим оставшиеся ходы для баффа урона
+                damage_moves_left = 0
+                damage_duration = 0
+                for bonus in self.active_bonuses:
+                    if bonus['type'] == 'damage_bonus':
+                        damage_moves_left = bonus['duration'] - (bonus['moves'] - self.moves_left)
+                        damage_duration = bonus['duration']
+                        break
+                
+                # Добавляем индикатор оставшегося времени
+                if damage_duration > 0:
+                    # Создаем затемнение в виде секторов для отображения оставшегося времени
+                    overlay = pygame.Surface((icon_size, icon_size), pygame.SRCALPHA)
+                    center = (icon_size//2, icon_size//2)
+                    radius = icon_size//2
+                    
+                    # Вычисляем угол для каждого сектора и закрашиваем истекшие ходы
+                    sector_angle = 360 / damage_duration  # угол на один ход
+                    expired_sectors = damage_duration - damage_moves_left
+                    
+                    if expired_sectors > 0:
+                        start_angle = 0
+                        end_angle = expired_sectors * sector_angle
+                        
+                        # Рисуем затемнение для истекших ходов
+                        for angle in range(int(start_angle), int(end_angle), 1):
+                            rad_angle = math.radians(angle)
+                            x = center[0] + int(radius * math.sin(rad_angle))
+                            y = center[1] - int(radius * math.cos(rad_angle))
+                            pygame.draw.line(overlay, (0, 0, 0, 160), center, (x, y), 1)
+                    
+                    # Применяем маску, чтобы затемнение было только внутри круга
+                    mask = pygame.Surface((icon_size, icon_size), pygame.SRCALPHA)
+                    pygame.draw.circle(mask, (255, 255, 255, 255), center, radius)
+                    overlay.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+                    
+                    # Накладываем затемнение на иконку
+                    damage_icon.blit(overlay, (0, 0))
+                
+                # Располагаем иконку и свечение напрямую на экране
+                glow_x = (buffs_container_width - glow.get_width()) // 2
+                glow_y = icon_y - 6
+                self.screen.blit(glow, (buffs_container_x + glow_x, buffs_container_y + glow_y), special_flags=pygame.BLEND_RGBA_ADD)
+                
+                icon_x = (buffs_container_width - icon_size) // 2
+                self.screen.blit(damage_icon, (buffs_container_x + icon_x, buffs_container_y + icon_y))
+                
+                # Не добавляем рамку вокруг иконки
+                
+                # Сохраняем прямоугольник для обработки наведения мыши
+                damage_buff_info = None
+                for bonus in self.active_bonuses:
+                    if bonus['type'] == 'damage_bonus':
+                        moves_left = bonus['duration'] - (bonus['moves'] - self.moves_left)
+                        damage_buff_info = {
+                            'type': 'damage_bonus',
+                            'value': int(bonus['value'] * 100),
+                            'moves_left': moves_left
+                        }
+                        break
+                
+                damage_buff_rect = pygame.Rect(
+                    buffs_container_x + (buffs_container_width - icon_size) // 2,
+                    buffs_container_y + icon_y,
+                    icon_size,
+                    icon_size
+                )
+                self._buff_rects.append((damage_buff_rect, damage_buff_info))
+                
+                icon_y += icon_size + icon_spacing
+        
         grid_left = field_anchor_x + BORDER
         grid_top = field_anchor_y + BORDER
         for y in range(GRID_SIZE):
@@ -440,23 +735,27 @@ class GameManager:
         crystal_text = font.render(f"{self.ether_crystals}", True, (120, 200, 255))
         self.screen.blit(crystal_text, (top_panel_rect.left+162, top_panel_rect.top+4))
         
-        # --- Уровень ---
-        total_level = getattr(self.npc_manager, 'total_level', 1)
-        stage = (total_level - 1) // 10 + 1
-        local_level = (total_level - 1) % 10 + 1
-        level_text = f"{stage}-{local_level}"
-        is_boss = (local_level == 10)
-        level_font = pygame.font.Font(None, 28)
-        level_color = COLORS['GOLD'] if is_boss else COLORS['WHITE']
-        level_label = level_font.render(level_text, True, level_color)
-        level_x = top_panel_rect.right - level_label.get_width() - 170
-        level_y = top_panel_rect.top + 4
-        self.screen.blit(level_label, (level_x, level_y))
-        if is_boss:
-            boss_font = pygame.font.Font(None, 20)
-            boss_text = boss_font.render("БОСС", True, COLORS['RED'])
-            self.screen.blit(boss_text, (level_x + level_label.get_width()//2 - boss_text.get_width()//2, level_y + level_label.get_height() + 2))
-            
+        # --- Значок есенций и их количество ---
+        # Определяем тип есенции с максимальным количеством
+        max_essence_type = max(self.essences, key=lambda k: self.essences[k])
+        max_essence_count = self.essences[max_essence_type]
+        essence_icon = pygame.Surface((18,18), pygame.SRCALPHA)
+        color_map = {
+            'red': (255, 100, 100),
+            'blue': (120, 180, 255),
+            'green': (100, 255, 100),
+            'yellow': (255, 255, 100),
+            'purple': (200, 100, 255),
+            'orange': (255, 180, 80)
+        }
+        pygame.draw.circle(essence_icon, color_map.get(max_essence_type, (120, 220, 255)), (9,9), 9)
+        pygame.draw.circle(essence_icon, (255,255,255,80), (9,9), 9, 2)
+        essence_icon_rect = pygame.Rect(top_panel_rect.left+190, top_panel_rect.top+6, 18, 18)
+        self.screen.blit(essence_icon, essence_icon_rect.topleft)
+        essence_text = font.render(f"{max_essence_count}", True, color_map.get(max_essence_type, (120, 220, 255)))
+        self.screen.blit(essence_text, (top_panel_rect.left+212, top_panel_rect.top+4))
+        self._essence_icon_rect = essence_icon_rect  # для тултипа
+        
         # --- Полоска HP врага ---
         enemy_hp_bar_w, enemy_hp_bar_h = 220, 22
         # Фиксированная позиция полоски HP под NPC: центрируем относительно области NPC
@@ -731,46 +1030,6 @@ class GameManager:
             
             # Сохраняем прямоугольник для обработки кликов вместе с индексом предмета
             self._inventory_slot_rects.append((slot_rect, start_idx + i))
-        
-        # Отображаем активные бонусы
-        if self.active_bonuses:
-            bonus_font = pygame.font.Font(None, 20)
-            bonus_y = inventory_rect.top + 8
-            bonus_x = inventory_rect.right - 20
-            
-            # Обновляем бонусы перед отрисовкой
-            self.update_active_bonuses()
-            
-            for i, bonus in enumerate(self.active_bonuses):
-                move_duration = 5000  # Примерно 5 секунд на ход
-                current_time = pygame.time.get_ticks()
-                elapsed_moves = (current_time - bonus['start_time']) / move_duration
-                moves_left = max(0, bonus['duration'] - elapsed_moves)
-                
-                if bonus['type'] == 'damage_bonus':
-                    bonus_text = f"+{int(bonus['value']*100)}% урон"
-                    bonus_color = (255, 100, 100)
-                elif bonus['type'] == 'crit_chance_bonus':
-                    bonus_text = f"+{int(bonus['value']*100)}% крит"
-                    bonus_color = (255, 100, 255)
-                else:
-                    bonus_text = f"Бонус: {bonus['type']}"
-                    bonus_color = (200, 200, 200)
-                
-                # Добавляем время действия
-                bonus_text += f" ({int(moves_left)} ходов)"
-                
-                # Создаем текст и определяем его ширину
-                bonus_label = bonus_font.render(bonus_text, True, bonus_color)
-                bonus_width = bonus_label.get_width() + 10
-                
-                # Рисуем фон с закругленными краями
-                bonus_bg_rect = pygame.Rect(bonus_x - bonus_width, bonus_y + i*22, bonus_width, 20)
-                pygame.draw.rect(self.screen, (50, 50, 70, 180), bonus_bg_rect, border_radius=10)
-                pygame.draw.rect(self.screen, bonus_color, bonus_bg_rect, 1, border_radius=10)
-                
-                # Рисуем текст
-                self.screen.blit(bonus_label, (bonus_x - bonus_width + 5, bonus_y + i*22 + 2))
           
         # --- Полоса здоровья игрока (под инвентарём с отступом 30px) ---
         # Временно скрыта
@@ -923,7 +1182,7 @@ class GameManager:
             if elapsed > 1000:
                 continue
             font = pygame.font.Font(None, 48)
-            value = f"-{popup['value']}"
+            value = str(popup['value'])
             color = popup['color']
             # Тень
             dmg_text_shadow = font.render(value, True, (0,0,0))
@@ -951,9 +1210,25 @@ class GameManager:
             self._show_gems_info_screen()
         if self.main_menu.visible:
             self.main_menu.draw(self.screen)
-        pygame.display.flip() 
+        
+        # Отображаем всплывающие подсказки в самом конце, чтобы они были поверх всех элементов
+        self._update_and_draw_tooltips()
+        
+        # ВСПЛЫВАЮЩЕЕ ОКНО ГЕМА (поверх всего)
+        if self._show_gem_popup and self._gem_popup_info:
+            self._draw_gem_popup()
+        
+        pygame.display.flip()
 
     def handle_click(self, pos):
+        # Если открыто окно информации о геме, сначала проверяем клик по крестику
+        if self._show_gem_popup:
+            if hasattr(self, '_gem_popup_close_rect') and self._gem_popup_close_rect.collidepoint(pos):
+                self._show_gem_popup = False
+                return
+            if self._gem_popup_rect and not self._gem_popup_rect.collidepoint(pos):
+                self._show_gem_popup = False
+                return
         # --- Сначала проверяем клики по основным кнопкам ---
         if hasattr(self, '_shop_button_rect') and self._shop_button_rect.collidepoint(pos):
             self.shop.toggle_visibility()
@@ -1002,6 +1277,8 @@ class GameManager:
             self.global_level = self.location_panel.current_global_level
             self._on_location_change()
             return
+            
+        # Проверка и обработка кликов при открытом окне информации о гемах
         if getattr(self, '_show_gems_info', False):
             # Проверяем клик по кнопке закрытия
             if hasattr(self, '_gems_close_btn_rect') and self._gems_close_btn_rect.collidepoint(pos):
@@ -1013,9 +1290,16 @@ class GameManager:
                 for gem_type, btn_rect, can_evolve in self._gem_evolution_buttons:
                     if btn_rect.collidepoint(pos) and can_evolve:
                         self.evolve_gem(gem_type)
-                        # Обновляем информацию о гемах
                         return
-            return
+            
+            # Проверяем, был ли клик внутри окна с информацией о гемах
+            if hasattr(self, '_gems_info_rect') and self._gems_info_rect.collidepoint(pos):
+                return  # Клик внутри окна, но не по интерактивным элементам
+            else:
+                # Клик вне окна - закрываем окно и продолжаем обработку клика
+                self._show_gems_info = False
+                # Не делаем return, чтобы продолжить обработку клика
+            
         if self.shop.visible:
             self.shop.handle_click(pos)
             return
@@ -1070,6 +1354,25 @@ class GameManager:
                     self.grid[self.selected_gem[1]][self.selected_gem[0]].is_selected = False
                     self.selected_gem = (x, y)
                     self.grid[y][x].is_selected = True 
+
+        # Обработка клика по кнопке "Улучшить крит за 10 есенций"
+        if self._show_gem_popup and hasattr(self, '_gem_popup_crit_btn_rect') and self._gem_popup_crit_btn_rect.collidepoint(pos):
+            info = self._gem_popup_info
+            gem_type = info['type']
+            if self.essences.get(gem_type, 0) >= 10:
+                self.essences[gem_type] -= 10
+                # Повышаем шанс крита для всех гемов этого типа
+                self.gem_progress[gem_type]['crit_chance'] = min(0.7, self.gem_progress[gem_type]['crit_chance'] + 0.01)
+                self.sync_gems_with_progress(gem_type)
+                # Визуальное уведомление
+                self.damage_popups.append({
+                    'value': f'+1% крит {gem_type}',
+                    'is_crit': True,
+                    'start_time': pygame.time.get_ticks() + 200,
+                    'color': (255, 100, 255)
+                })
+                self._show_gem_popup = False
+            return
 
     def is_adjacent(self, pos1, pos2):
         return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1]) == 1
@@ -1400,7 +1703,7 @@ class GameManager:
                     'type': 'damage_bonus',
                     'value': 0.5,  # +50% к урону
                     'duration': 3,  # 3 хода
-                    'start_time': pygame.time.get_ticks()
+                    'moves': self.moves_left  # Запоминаем текущее количество ходов
                 })
                 # Добавляем визуальное уведомление
                 self.damage_popups.append({
@@ -1416,7 +1719,7 @@ class GameManager:
                     'type': 'crit_chance_bonus',
                     'value': 0.2,  # +20% к шансу крита
                     'duration': 3,  # 3 хода
-                    'start_time': pygame.time.get_ticks()
+                    'moves': self.moves_left  # Запоминаем текущее количество ходов
                 })
                 # Добавляем визуальное уведомление
                 self.damage_popups.append({
@@ -1454,16 +1757,17 @@ class GameManager:
         return False
                 
     def update_active_bonuses(self):
-        """Обновляет активные временные бонусы"""
-        current_time = pygame.time.get_ticks()
-        move_duration = 5000  # Примерно 5 секунд на ход
-        
-        # Фильтруем и обновляем бонусы
+        """Обновляет активные бонусы, удаляя истекшие"""
+        if not hasattr(self, 'active_bonuses'):
+            self.active_bonuses = []
+            return
+            
         updated_bonuses = []
+        
+        # Проверяем каждый бонус
         for bonus in self.active_bonuses:
-            # Проверяем не истек ли срок действия
-            elapsed_moves = (current_time - bonus['start_time']) / move_duration
-            if elapsed_moves < bonus['duration']:
+            # Проверяем, сколько ходов прошло с момента активации бонуса
+            if 'moves' in bonus and bonus['moves'] - self.moves_left < bonus['duration']:
                 updated_bonuses.append(bonus)
                 
         self.active_bonuses = updated_bonuses
@@ -1528,13 +1832,12 @@ class GameManager:
         falling_complete = initial_falling_gems_count > 0 and len(still_falling) == 0
         self.falling_gems = still_falling
 
-        # Если все гемы закончили падать, проверяем новые комбинации
         if falling_complete:
-            # Проверяем, нет ли уже обрабатываемых комбинаций в очереди
-            if not self.pending_matches:
-                new_matches = self.check_matches()
-                if new_matches:
-                    self.pending_matches.extend(new_matches)
+            # Если после падения есть новые совпадения — сразу обрабатываем их!
+            new_matches = self.check_matches()
+            if new_matches:
+                self.process_matches(new_matches, is_player_move=False)
+                return  # Ждём завершения новых анимаций
 
         # Проверяем состояние анимаций
         if self.waiting_for_animations:
@@ -1548,28 +1851,26 @@ class GameManager:
                     delattr(self, '_animation_start_time')
         else:
             if not self.animating_gems and not self.falling_gems:
-                # Последняя проверка на наличие новых комбинаций после всех анимаций
-                if not self.pending_matches:
-                    new_matches = self.check_matches()
-                    if new_matches:
-                        self.pending_matches.extend(new_matches)
-                
-                # Обработка отложенных комбинаций
-                if self.pending_matches and getattr(self, '_match_recursion_depth', 0) <= 10:
+                # Проверяем, нет ли уже обрабатываемых комбинаций в очереди
+                if self.pending_matches:
                     matches = self.pending_matches
                     self.pending_matches = []
-                    # Предотвращаем вложенный вызов обработки совпадений
                     self.process_matches(matches, is_player_move=False)
-                else:
-                    # Завершаем обработку, если нет новых комбинаций или достигнут лимит рекурсии
-                    self.animation_complete = True
-                    self.is_processing_matches = False
-                    # Сбрасываем счетчик рекурсии
-                    if hasattr(self, '_match_recursion_depth'):
-                        delattr(self, '_match_recursion_depth')
-                    # Сбрасываем таймер после завершения всех анимаций
-                    if hasattr(self, '_animation_start_time'):
-                        delattr(self, '_animation_start_time')
+                    return  # Ждём завершения новых анимаций
+
+                # Проверяем новые совпадения после падения новых гемов
+                new_matches = self.check_matches()
+                if new_matches:
+                    self.process_matches(new_matches, is_player_move=False)
+                    return  # Ждём завершения новых анимаций
+
+                # Если больше нет совпадений и анимаций — только тогда завершаем обработку
+                self.animation_complete = True
+                self.is_processing_matches = False
+                if hasattr(self, '_match_recursion_depth'):
+                    delattr(self, '_match_recursion_depth')
+                if hasattr(self, '_animation_start_time'):
+                    delattr(self, '_animation_start_time')
 
     def _process_pending_actions(self):
         """Обработка отложенных действий после завершения анимаций"""
@@ -1680,6 +1981,39 @@ class GameManager:
                 
                 # Стандартная награда монетами
                 self.coins += int(10 + (self.global_level * 5))
+
+                # Новый дроп с противников
+                drop_roll = random.random()
+                if drop_roll < 0.3:
+                    # 30% шанс — есенции
+                    essence_type = random.choice(list(self.essences.keys()))
+                    essence_count = random.randint(1, 3)
+                    self.essences[essence_type] += essence_count
+                    self.damage_popups.append({
+                        'value': f'+{essence_count} ес. {essence_type}',
+                        'is_crit': True,
+                        'start_time': pygame.time.get_ticks() + 500,
+                        'color': (120, 220, 255)
+                    })
+                elif drop_roll < 0.8:
+                    # 50% шанс — монеты
+                    coins = random.randint(10, 20)
+                    self.coins += coins
+                    self.damage_popups.append({
+                        'value': f'+{coins} монет',
+                        'is_crit': False,
+                        'start_time': pygame.time.get_ticks() + 500,
+                        'color': (255, 215, 0)
+                    })
+                elif drop_roll < 0.85:
+                    # 5% шанс — редкий материал (пока только popup)
+                    self.damage_popups.append({
+                        'value': f'+1 осколок',
+                        'is_crit': True,
+                        'start_time': pygame.time.get_ticks() + 500,
+                        'color': (180, 255, 255)
+                    })
+                # 10% — ничего не выпадает
                 
                 # Шанс выпадения предметов
                 drop_chance = 0.3  # 30% шанс выпадения предмета
@@ -1805,32 +2139,47 @@ class GameManager:
         
     def _show_gems_info_screen(self):
         """Отображает экран информации о гемах с возможностью эволюции"""
+        # Размеры и позиция окна
         info_w = 800
         info_h = 600
         info_x = (WINDOW_WIDTH - info_w) // 2
         info_y = max(20, (WINDOW_HEIGHT - info_h) // 2 - 50)
+        
+        # Сохраняем прямоугольник всего окна для обработки кликов
+        info_rect = pygame.Rect(info_x, info_y, info_w, info_h)
+        self._gems_info_rect = info_rect
+        
+        # Создаем фоновую поверхность с полупрозрачностью
         info_surface = pygame.Surface((info_w, info_h), pygame.SRCALPHA)
-        pygame.draw.rect(info_surface, (40, 40, 60, 230), info_surface.get_rect(), border_radius=28)
-        grad = pygame.Surface((info_w, info_h//3), pygame.SRCALPHA)
-        for i in range(info_h//3):
-            alpha = max(0, 90 - i//2)
-            pygame.draw.rect(grad, (255,255,255,alpha), (0,i,info_w,1))
-        grad_mask = pygame.Surface((info_w, info_h//3), pygame.SRCALPHA)
-        pygame.draw.rect(grad_mask, (255,255,255,255), grad_mask.get_rect(), border_radius=28)
-        grad.blit(grad_mask, (0,0), special_flags=pygame.BLEND_RGBA_MIN)
-        info_surface.blit(grad, (0,0))
-        font = pygame.font.Font(None, 48)
-        title = font.render("Гемы и прокачка", True, COLORS['WHITE'])
+        
+        # Современный темный фон с меньшей прозрачностью
+        bg_color = (30, 35, 45, 240)
+        pygame.draw.rect(info_surface, bg_color, info_surface.get_rect(), border_radius=15)
+        
+        # Добавляем тонкую рамку вместо градиента
+        border_color = (80, 85, 95, 100)
+        pygame.draw.rect(info_surface, border_color, info_surface.get_rect(), 1, border_radius=15)
+        
+        # Заголовок в минималистичном стиле
+        title_font = pygame.font.Font(None, 42)
+        title = title_font.render("ПРОКАЧКА ГЕМОВ", True, (220, 220, 230))
+        title_shadow = title_font.render("ПРОКАЧКА ГЕМОВ", True, (60, 65, 75))
+        
+        # Тень заголовка (тонкий эффект глубины)
+        info_surface.blit(title_shadow, (info_w//2 - title.get_width()//2 + 1, 31))
         info_surface.blit(title, (info_w//2 - title.get_width()//2, 30))
         
-        # Отображаем кристаллы для эволюции
-        crystal_font = pygame.font.Font(None, 32)
-        crystal_text = crystal_font.render(f"Эфирные кристаллы: {self.ether_crystals}", True, (120, 200, 255))
-        info_surface.blit(crystal_text, (info_w//2 - crystal_text.get_width()//2, 80))
+        # Линия-разделитель под заголовком
+        pygame.draw.line(info_surface, (80, 85, 95, 120), (50, 70), (info_w - 50, 70), 1)
+        
+        # Отображаем кристаллы для эволюции в современном стиле
+        crystal_font = pygame.font.Font(None, 28)
+        crystal_text = crystal_font.render(f"Эфирные кристаллы: {self.ether_crystals}", True, (140, 220, 255))
+        info_surface.blit(crystal_text, (info_w//2 - crystal_text.get_width()//2, 85))
         
         # Отображаем карточки гемов
-        card_w, card_h = 340, 170
-        card_gap_x, card_gap_y = 10, 10
+        card_w, card_h = 350, 130  # Уменьшили высоту карточек
+        card_gap_x, card_gap_y = 20, 15  # Увеличили отступ между карточками
         cols = 2
         rows = 3
         start_x = (info_w - (card_w * cols + card_gap_x * (cols - 1))) // 2
@@ -1844,88 +2193,466 @@ class GameManager:
             card_x = start_x + col * (card_w + card_gap_x)
             card_y = start_y + row * (card_h + card_gap_y)
             card_rect = pygame.Rect(card_x, card_y, card_w, card_h)
-            pygame.draw.rect(info_surface, (60, 60, 90, 210), card_rect, border_radius=16)
-            pygame.draw.rect(info_surface, COLORS['WHITE'], card_rect, 2, border_radius=16)
+            
+            # Более тонкий и современный стиль карточки
+            card_color = (45, 50, 60, 200)  # Чуть светлее фона, но все еще темный
+            pygame.draw.rect(info_surface, card_color, card_rect, border_radius=10)
+            
+            # Тонкая светлая рамка
+            border_highlight = (90, 95, 105, 120)
+            pygame.draw.rect(info_surface, border_highlight, card_rect, 1, border_radius=10)
             
             try:
                 gem_img = pygame.image.load(GEM_IMAGES[gem_type]).convert_alpha()
-                gem_img = pygame.transform.smoothscale(gem_img, (48, 48))
+                gem_img = pygame.transform.smoothscale(gem_img, (40, 40))  # Чуть меньше иконка
             except Exception:
-                gem_img = pygame.Surface((48,48), pygame.SRCALPHA)
-                gem_img.fill(COLORS['GRAY'])
+                gem_img = pygame.Surface((40, 40), pygame.SRCALPHA)
+                gem_img.fill((180, 180, 180))
             
-            info_surface.blit(gem_img, (card_x + 14, card_y + 14))
+            # Создаем круглую подложку для гема
+            gem_bg = pygame.Surface((50, 50), pygame.SRCALPHA)
+            pygame.draw.circle(gem_bg, (60, 65, 75), (25, 25), 25)
+            pygame.draw.circle(gem_bg, border_highlight, (25, 25), 25, 1)
+            info_surface.blit(gem_bg, (card_x + 12, card_y + card_h//2 - 25))
+            info_surface.blit(gem_img, (card_x + 17, card_y + card_h//2 - 20))
             
             prog = self.gem_progress[gem_type]
             gem_level = prog['level']
             gem_xp = prog['xp']
             gem_xp_next = int(100 * (1.2 ** (gem_level-1)))
             
-            name_font = pygame.font.Font(None, 30)
-            name_text = name_font.render(gem_type.capitalize(), True, COLORS['WHITE'])
-            info_surface.blit(name_text, (card_x + 74, card_y + 18))
+            # Название гема
+            name_font = pygame.font.Font(None, 28)
+            name_text = name_font.render(gem_type.capitalize(), True, (220, 220, 230))
+            info_surface.blit(name_text, (card_x + 75, card_y + 15))
             
-            lvl_font = pygame.font.Font(None, 26)
-            lvl_text = lvl_font.render(f"Ур. {gem_level}", True, COLORS['CYAN'])
-            info_surface.blit(lvl_text, (card_x + card_w - lvl_text.get_width() - 16, card_y + 18))
+            # Уровень гема теперь справа от имени с вертикальным разделителем
+            lvl_font = pygame.font.Font(None, 24)
+            lvl_text = lvl_font.render(f"Ур. {gem_level}", True, (140, 200, 255))
+            info_surface.blit(lvl_text, (card_x + card_w - lvl_text.get_width() - 16, card_y + 16))
             
-            stat_font = pygame.font.Font(None, 24)
-            dmg_text = stat_font.render(f"Урон: {prog['damage']}", True, COLORS['GOLD'])
-            crit_text = stat_font.render(f"Крит: {int(prog['crit_chance']*100)}%", True, COLORS['PINK'])
-            info_surface.blit(dmg_text, (card_x + 74, card_y + 48))
-            info_surface.blit(crit_text, (card_x + card_w - crit_text.get_width() - 16, card_y + 48))
+            # Статы гема
+            stat_font = pygame.font.Font(None, 22)
+            # Создаем более компактное отображение для характеристик
+            stats_y = card_y + 50
             
-            xp_text = stat_font.render(f"Опыт: {gem_xp}/{gem_xp_next}", True, COLORS['WHITE'])
-            info_surface.blit(xp_text, (card_x + 74, card_y + 76))
+            # Урон
+            dmg_icon = pygame.Surface((16, 16), pygame.SRCALPHA)
+            pygame.draw.polygon(dmg_icon, (255, 180, 60), [(8, 2), (14, 8), (8, 14), (2, 8)])
+            info_surface.blit(dmg_icon, (card_x + 75, stats_y))
+            dmg_text = stat_font.render(f"{prog['damage']}", True, (255, 200, 80))
+            info_surface.blit(dmg_text, (card_x + 95, stats_y - 2))
             
-            # Информация об эволюции
-            evolution_text = stat_font.render(f"Эволюция: {prog['evolution']}", True, COLORS['YELLOW'])
-            info_surface.blit(evolution_text, (card_x + card_w - evolution_text.get_width() - 16, card_y + 76))
+            # Крит
+            crit_icon = pygame.Surface((16, 16), pygame.SRCALPHA)
+            pygame.draw.circle(crit_icon, (255, 100, 255), (8, 8), 7)
+            pygame.draw.line(crit_icon, (255, 220, 255), (8, 3), (8, 13), 1)
+            pygame.draw.line(crit_icon, (255, 220, 255), (3, 8), (13, 8), 1)
+            info_surface.blit(crit_icon, (card_x + 140, stats_y))
+            crit_text = stat_font.render(f"{int(prog['crit_chance']*100)}%", True, (255, 160, 255))
+            info_surface.blit(crit_text, (card_x + 160, stats_y - 2))
             
+            # Эволюция
+            if prog['evolution'] > 0:
+                evo_icon = pygame.Surface((16, 16), pygame.SRCALPHA)
+                pygame.draw.polygon(evo_icon, (255, 220, 60), [(8, 2), (13, 6), (13, 12), (8, 16), (3, 12), (3, 6)])
+                info_surface.blit(evo_icon, (card_x + 210, stats_y))
+                evo_text = stat_font.render(f"{prog['evolution']}", True, (255, 220, 100))
+                info_surface.blit(evo_text, (card_x + 230, stats_y - 2))
+            
+            # Бонус эволюции
             if prog['evolved_bonus']:
-                bonus_text = stat_font.render(f"Бонус: {prog['evolved_bonus']}", True, COLORS['GREEN'])
-                info_surface.blit(bonus_text, (card_x + 74, card_y + 104))
+                bonus_y = stats_y + 25
+                bonus_icon = pygame.Surface((12, 12), pygame.SRCALPHA)
+                pygame.draw.circle(bonus_icon, (100, 255, 100), (6, 6), 5)
+                pygame.draw.circle(bonus_icon, (200, 255, 200), (6, 6), 5, 1)
+                info_surface.blit(bonus_icon, (card_x + 75, bonus_y + 1))
+                bonus_text = stat_font.render(f"{prog['evolved_bonus']}", True, (160, 255, 160))
+                info_surface.blit(bonus_text, (card_x + 95, bonus_y))
             
-            # Полоска опыта
-            bar_w, bar_h = card_w - 90, 14
-            bar_x = card_x + 74
-            bar_y = card_y + card_h - 58
-            pygame.draw.rect(info_surface, COLORS['LIGHT_GRAY'], (bar_x, bar_y, bar_w, bar_h), border_radius=7)
+            # Полоска опыта - более тонкая и современная
+            bar_w, bar_h = card_w - 90, 6  # Более тонкая полоска
+            bar_x = card_x + 75
+            bar_y = card_y + card_h - 20
+            
+            # Фон полоски прогресса
+            bar_bg = (60, 65, 75)
+            pygame.draw.rect(info_surface, bar_bg, (bar_x, bar_y, bar_w, bar_h), border_radius=3)
+            
+            # Заполнение полоски прогресса
             fill_w = int(bar_w * min(gem_xp / gem_xp_next, 1.0))
-            pygame.draw.rect(info_surface, COLORS['CYAN'], (bar_x, bar_y, fill_w, bar_h), border_radius=7)
-            pygame.draw.rect(info_surface, COLORS['WHITE'], (bar_x, bar_y, bar_w, bar_h), 2, border_radius=7)
+            if fill_w > 0:
+                # Градиент для заполнения
+                bar_fill = pygame.Surface((fill_w, bar_h), pygame.SRCALPHA)
+                for i in range(fill_w):
+                    progress = i / fill_w
+                    r = int(100 + progress * 40)
+                    g = int(180 + progress * 40)
+                    b = int(255 - progress * 40)
+                    pygame.draw.line(bar_fill, (r, g, b), (i, 0), (i, bar_h), 1)
+                info_surface.blit(bar_fill, (bar_x, bar_y))
+                
+                # Скругленные углы для заполнения
+                pygame.draw.rect(info_surface, bar_bg, (bar_x, bar_y, bar_w, bar_h), 1, border_radius=3)
             
-            # Кнопка эволюции, если доступна
+            # Текст с прогрессом под полоской
+            xp_text = stat_font.render(f"{gem_xp}/{gem_xp_next} XP", True, (180, 185, 195))
+            info_surface.blit(xp_text, (bar_x + bar_w - xp_text.get_width(), bar_y + bar_h + 4))
+            
+            # Кнопка эволюции в минималистичном стиле
             evolution_cost = prog['evolution'] + 1
             can_evolve = self.ether_crystals >= evolution_cost
-            evolve_btn_w, evolve_btn_h = 170, 32
-            evolve_btn_x = card_x + (card_w - evolve_btn_w) // 2
-            evolve_btn_y = card_y + card_h - 40
+            
+            evolve_btn_w, evolve_btn_h = 130, 26
+            evolve_btn_x = card_x + 22
+            evolve_btn_y = card_y + card_h - 34
             evolve_btn_rect = pygame.Rect(evolve_btn_x, evolve_btn_y, evolve_btn_w, evolve_btn_h)
-            btn_color = (100, 180, 100, 220) if can_evolve else (100, 100, 100, 180)
-            pygame.draw.rect(info_surface, btn_color, evolve_btn_rect, border_radius=12)
-            pygame.draw.rect(info_surface, COLORS['WHITE'], evolve_btn_rect, 2, border_radius=12)
+            
+            # Определяем цвет кнопки в зависимости от возможности эволюции
+            if can_evolve:
+                # Активная кнопка
+                btn_color = (80, 160, 220, 180)
+                btn_outline = (140, 200, 255, 150)
+                text_color = (240, 240, 250)
+            else:
+                # Неактивная кнопка
+                btn_color = (80, 85, 95, 120)
+                btn_outline = (100, 105, 115, 100)
+                text_color = (160, 165, 175)
+            
+            pygame.draw.rect(info_surface, btn_color, evolve_btn_rect, border_radius=5)
+            pygame.draw.rect(info_surface, btn_outline, evolve_btn_rect, 1, border_radius=5)
             
             evolve_cost_text = f"Эволюция: {evolution_cost} ЭК"
-            evolve_font = pygame.font.Font(None, 22)
-            evolve_text = evolve_font.render(evolve_cost_text, True, COLORS['WHITE'])
-            info_surface.blit(evolve_text, (evolve_btn_x + evolve_btn_w//2 - evolve_text.get_width()//2, evolve_btn_y + evolve_btn_h//2 - evolve_text.get_height()//2))
+            evolve_font = pygame.font.Font(None, 20)
+            evolve_text = evolve_font.render(evolve_cost_text, True, text_color)
+            text_x = evolve_btn_x + evolve_btn_w//2 - evolve_text.get_width()//2
+            text_y = evolve_btn_y + evolve_btn_h//2 - evolve_text.get_height()//2
+            info_surface.blit(evolve_text, (text_x, text_y))
             
             # Сохраняем кнопку для обработки кликов
             global_btn_rect = pygame.Rect(info_x + evolve_btn_x, info_y + evolve_btn_y, evolve_btn_w, evolve_btn_h)
             self._gem_evolution_buttons.append((gem_type, global_btn_rect, can_evolve))
         
-        # Кнопка закрытия
-        close_btn_width = 100
-        close_btn_height = 40
-        close_btn_x = info_w - close_btn_width - 20
+        # Кнопка закрытия - минималистичная
+        close_btn_width = 80
+        close_btn_height = 30
+        close_btn_x = info_w - close_btn_width - 15
         close_btn_y = 15
         close_btn_rect = pygame.Rect(close_btn_x, close_btn_y, close_btn_width, close_btn_height)
-        pygame.draw.rect(info_surface, (120,40,40,220), close_btn_rect, border_radius=14)
-        pygame.draw.rect(info_surface, COLORS['WHITE'], close_btn_rect, 2, border_radius=14)
-        close_font = pygame.font.Font(None, 32)
-        close_text = close_font.render("Закрыть", True, COLORS['WHITE'])
-        info_surface.blit(close_text, (close_btn_x + close_btn_width//2 - close_text.get_width()//2, close_btn_y + close_btn_height//2 - close_text.get_height()//2))
         
+        close_btn_color = (60, 65, 75, 200)
+        close_btn_border = (120, 125, 135, 150)
+        pygame.draw.rect(info_surface, close_btn_color, close_btn_rect, border_radius=5)
+        pygame.draw.rect(info_surface, close_btn_border, close_btn_rect, 1, border_radius=5)
+        
+        close_font = pygame.font.Font(None, 24)
+        close_text = close_font.render("Закрыть", True, (220, 220, 230))
+        info_surface.blit(close_text, (close_btn_x + close_btn_width//2 - close_text.get_width()//2, 
+                                    close_btn_y + close_btn_height//2 - close_text.get_height()//2))
+        
+        # Отображаем финальную поверхность
         self.screen.blit(info_surface, (info_x, info_y))
         self._gems_close_btn_rect = pygame.Rect(info_x + close_btn_x, info_y + close_btn_y, close_btn_width, close_btn_height)
+
+    def _update_and_draw_tooltips(self):
+        """Обновляет и отображает всплывающие подсказки при наведении на бафы"""
+        mouse_pos = pygame.mouse.get_pos()
+        current_time = pygame.time.get_ticks()
+        
+        # Проверяем, наведена ли мышь на какой-либо из баф-значков
+        hover_tooltip = None
+        
+        for rect, buff_info in self._buff_rects:
+            if rect.collidepoint(mouse_pos):
+                hover_tooltip = buff_info
+                break
+        
+        # Если мышь наведена на новый баф или убрана с предыдущего
+        if hover_tooltip != self._active_tooltip:
+            self._active_tooltip = hover_tooltip
+            self._tooltip_time = current_time
+        
+        # Отображаем подсказку только если мышь задержалась на значке более 300 мс
+        if self._active_tooltip and current_time - self._tooltip_time > 300:
+            # Создаем поверхность для тултипа
+            info = self._active_tooltip
+            
+            # Формируем текст подсказки в зависимости от типа бафа
+            if info['type'] == 'crit_chance_bonus':
+                tooltip_text = f"+{info['value']}% к шансу крита"
+                tooltip_color = (255, 100, 255)
+            elif info['type'] == 'damage_bonus':
+                tooltip_text = f"+{info['value']}% к урону"
+                tooltip_color = (255, 100, 100)
+            else:
+                tooltip_text = f"Бонус: {info['type']}"
+                tooltip_color = (200, 200, 200)
+            
+            # Добавляем информацию о длительности
+            tooltip_text += f" (осталось {info['moves_left']} ходов)"
+            
+            # Рендерим текст
+            tooltip_font = pygame.font.Font(None, 20)
+            text_surf = tooltip_font.render(tooltip_text, True, COLORS['WHITE'])
+            
+            # Создаем поверхность с фоном
+            padding = 8
+            tooltip_width = text_surf.get_width() + padding * 2
+            tooltip_height = text_surf.get_height() + padding * 2
+            tooltip_surf = pygame.Surface((tooltip_width, tooltip_height), pygame.SRCALPHA)
+            
+            # Рисуем фон с закругленными краями
+            pygame.draw.rect(tooltip_surf, (40, 40, 40, 220), tooltip_surf.get_rect(), border_radius=8)
+            
+            # Добавляем цветную полоску слева
+            stripe_width = 4
+            stripe_rect = pygame.Rect(0, 0, stripe_width, tooltip_height)
+            pygame.draw.rect(tooltip_surf, tooltip_color, stripe_rect, border_radius=8)
+            
+            # Размещаем текст
+            tooltip_surf.blit(text_surf, (padding + stripe_width, padding))
+            
+            # Размещаем подсказку над значком
+            tooltip_x = mouse_pos[0] - tooltip_width // 2
+            tooltip_y = mouse_pos[1] - tooltip_height - 10
+            
+            # Проверяем, не выходит ли тултип за границы экрана
+            if tooltip_x < 0:
+                tooltip_x = 0
+            elif tooltip_x + tooltip_width > WINDOW_WIDTH:
+                tooltip_x = WINDOW_WIDTH - tooltip_width
+            if tooltip_y < 0:
+                tooltip_y = mouse_pos[1] + 20
+            
+            # Отображаем подсказку
+            self.screen.blit(tooltip_surf, (tooltip_x, tooltip_y))
+
+    def _draw_gem_popup(self):
+        # Современное окно информации о геме
+        info = self._gem_popup_info
+        popup_w, popup_h = 400, 390
+        popup_x, popup_y = self._gem_popup_pos if hasattr(self, '_gem_popup_pos') else (100, 100)
+        popup_rect = pygame.Rect(popup_x, popup_y, popup_w, popup_h)
+        self._gem_popup_rect = popup_rect
+        
+        # Тень
+        shadow = pygame.Surface((popup_w+12, popup_h+12), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (0,0,0,80), shadow.get_rect(), border_radius=18)
+        self.screen.blit(shadow, (popup_x-6, popup_y-6))
+        
+        # Окно — теперь полностью непрозрачное
+        surf = pygame.Surface((popup_w, popup_h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (38, 44, 56, 255), surf.get_rect(), border_radius=14)
+        pygame.draw.rect(surf, (120, 130, 150, 60), surf.get_rect(), 1, border_radius=14)
+        
+        # --- ФОН-ГЕМ ---
+        try:
+            bg_gem_img = pygame.image.load(GEM_IMAGES[info['type']]).convert_alpha()
+            scale = int(popup_w * 0.7)
+            bg_gem_img = pygame.transform.smoothscale(bg_gem_img, (scale, scale))
+            bg_gem_img.set_alpha(30)
+            surf.blit(bg_gem_img, (popup_w//2 - scale//2, popup_h//2 - scale//2 + 40))
+        except Exception:
+            pass
+
+        # --- ЗАГОЛОВОК И КРЕСТИК ---
+        color_map = {
+            'red': (255, 100, 100),
+            'blue': (120, 180, 255),
+            'green': (100, 255, 100),
+            'yellow': (255, 255, 100),
+            'purple': (200, 100, 255),
+            'orange': (255, 180, 80)
+        }
+        accent_color = color_map.get(info['type'], (180, 220, 255))
+        font_title = pygame.font.Font(None, 36)
+        name = info['type'].capitalize()
+        title = font_title.render(name, True, accent_color)
+        surf.blit(title, (popup_w//2 - title.get_width()//2, 18))
+        # Крестик
+        close_size = 22
+        close_rect = pygame.Rect(popup_w - close_size - 10, 14, close_size, close_size)
+        pygame.draw.circle(surf, (60, 65, 75, 120), close_rect.center, close_size//2)
+        pygame.draw.circle(surf, (120, 130, 150, 60), close_rect.center, close_size//2, 1)
+        cx, cy = close_rect.center
+        for dx in [-1, 0, 1]:
+            pygame.draw.line(surf, (220,220,230,180), (cx-6+dx, cy-6), (cx+6+dx, cy+6), 2)
+            pygame.draw.line(surf, (220,220,230,180), (cx+6+dx, cy-6), (cx-6+dx, cy+6), 2)
+        self._gem_popup_close_rect = pygame.Rect(popup_x + close_rect.x, popup_y + close_rect.y, close_size, close_size)
+
+        # --- ОПИСАНИЕ ---
+        gem_descriptions = {
+            'red': 'Огненный гем — наносит повышенный урон по ледяным врагам.',
+            'blue': 'Ледяной гем — может замедлять врагов.',
+            'green': 'Ядовитый гем — шанс нанести урон с течением времени.',
+            'yellow': 'Молниеносный гем — шанс оглушить врага.',
+            'purple': 'Тёмный гем — может восстанавливать здоровье.',
+            'orange': 'Каменный гем — увеличивает защиту.'
+        }
+        desc = gem_descriptions.get(info['type'], '')
+        font_desc = pygame.font.Font(None, 20)
+        def wrap_text(text, font, max_width):
+            words = text.split(' ')
+            lines = []
+            cur = ''
+            for w in words:
+                test = cur + (' ' if cur else '') + w
+                if font.size(test)[0] > max_width:
+                    if cur:
+                        lines.append(cur)
+                    cur = w
+                else:
+                    cur = test
+            if cur:
+                lines.append(cur)
+            return lines
+        desc_lines = wrap_text(desc, font_desc, popup_w-40)
+        for i, line in enumerate(desc_lines):
+            desc_text = font_desc.render(line, True, (200, 210, 220))
+            surf.blit(desc_text, (32, 58 + i*22))
+
+        # --- ХАРАКТЕРИСТИКИ В ОДНУ СТРОКУ ---
+        font = pygame.font.Font(None, 20)
+        icons_y = 58 + len(desc_lines)*22 + 18
+        icon_r = 13
+        # ◉ Урон
+        dmg_bg = pygame.Surface((icon_r*2, icon_r*2), pygame.SRCALPHA)
+        pygame.draw.circle(dmg_bg, (60, 60, 60, 180), (icon_r,icon_r), icon_r)
+        pygame.draw.polygon(dmg_bg, (255, 200, 80), [(icon_r,4),(icon_r*2-4,icon_r),(icon_r,icon_r*2-4),(4,icon_r)])
+        surf.blit(dmg_bg, (32, icons_y))
+        dmg = font.render(f"Урон: {info['damage']}", True, (255, 200, 80))
+        surf.blit(dmg, (32+icon_r*2+6, icons_y+2))
+        # ◉ Крит
+        crit_bg = pygame.Surface((icon_r*2, icon_r*2), pygame.SRCALPHA)
+        pygame.draw.circle(crit_bg, (60, 60, 60, 180), (icon_r,icon_r), icon_r)
+        pygame.draw.circle(crit_bg, (255, 100, 255), (icon_r,icon_r), icon_r-3)
+        pygame.draw.line(crit_bg, (255, 220, 255), (icon_r,5), (icon_r,icon_r*2-5), 1)
+        pygame.draw.line(crit_bg, (255, 220, 255), (5,icon_r), (icon_r*2-5,icon_r), 1)
+        surf.blit(crit_bg, (popup_w//2-10, icons_y))
+        crit = font.render(f"Крит: {int(info['crit_chance']*100)}% x{info['crit_multiplier']:.1f}", True, (255, 160, 255))
+        surf.blit(crit, (popup_w//2-10+icon_r*2+6, icons_y+2))
+
+        # --- ОПЫТ ---
+        block_y = icons_y + icon_r*2 + 18
+        # ◉ Опыт
+        xp_bg = pygame.Surface((icon_r*2, icon_r*2), pygame.SRCALPHA)
+        pygame.draw.circle(xp_bg, (60, 60, 60, 180), (icon_r,icon_r), icon_r)
+        pygame.draw.rect(xp_bg, (120, 200, 255), (5,icon_r-3,icon_r*2-10,6), border_radius=3)
+        surf.blit(xp_bg, (32, block_y))
+        xp = font.render(f"Опыт: {info['xp']}/{info['xp_next']}", True, (180, 185, 195))
+        surf.blit(xp, (32+icon_r*2+6, block_y+2))
+        # Полоса опыта
+        bar_x = 32
+        bar_y = block_y + icon_r*2 + 6
+        bar_w = popup_w - 64
+        bar_h = 12
+        pygame.draw.rect(surf, (60, 65, 75, 255), (bar_x, bar_y, bar_w, bar_h), border_radius=6)
+        fill_w = int(bar_w * min(info['xp'] / info['xp_next'], 1.0))
+        if fill_w > 0:
+            bar_fill = pygame.Surface((fill_w, bar_h), pygame.SRCALPHA)
+            for i in range(fill_w):
+                progress = i / fill_w
+                r = int(100 + progress * 40)
+                g = int(180 + progress * 40)
+                b = int(255 - progress * 40)
+                pygame.draw.line(bar_fill, (r, g, b, 255), (i, 0), (i, bar_h), 1)
+            surf.blit(bar_fill, (bar_x, bar_y))
+        pygame.draw.rect(surf, (120, 130, 150, 255), (bar_x, bar_y, bar_w, bar_h), 2, border_radius=6)
+
+        # --- ЭВОЛЮЦИЯ ---
+        evo_y = bar_y + bar_h + 12
+        evo_bg = pygame.Surface((icon_r*2, icon_r*2), pygame.SRCALPHA)
+        pygame.draw.circle(evo_bg, (60, 60, 60, 180), (icon_r,icon_r), icon_r)
+        pygame.draw.polygon(evo_bg, (255, 220, 100), [(icon_r,4),(icon_r*2-4,icon_r),(icon_r,icon_r*2-4),(4,icon_r)])
+        surf.blit(evo_bg, (32, evo_y))
+        evo = font.render(f"Эволюция: {info['evolution']}", True, (255, 220, 100))
+        surf.blit(evo, (32+icon_r*2+6, evo_y+2))
+        evo_bar_y = evo_y + icon_r*2 + 6
+        evo_bar_h = 12
+        evo_bar_gap = 8
+        evo_bar_w = popup_w - 64
+        evo_stage_w = (evo_bar_w - 2*evo_bar_gap) // 3
+        for i in range(3):
+            stage_x = bar_x + i*(evo_stage_w + evo_bar_gap)
+            color = (80, 90, 110, 255)
+            if info['evolution'] > i:
+                color = (255, 220, 100, 255)
+            pygame.draw.rect(surf, color, (stage_x, evo_bar_y, evo_stage_w, evo_bar_h), border_radius=6)
+            pygame.draw.rect(surf, (120, 130, 150, 255), (stage_x, evo_bar_y, evo_stage_w, evo_bar_h), 2, border_radius=6)
+
+        # --- КНОПКИ ВНИЗУ ---
+        btn_font = pygame.font.Font(None, 16)
+        btn2_w, btn2_h = 160, 26
+        btn2_x = 32
+        btn2_y = evo_bar_y + evo_bar_h + 18
+        btn3_w, btn3_h = 160, 26
+        btn3_x = btn2_x + btn2_w + 18
+        btn3_y = btn2_y
+        enough_ess2 = self.essences.get(info['type'], 0) >= 15
+        btn2_color = (255, 180, 80, 255) if enough_ess2 else (80, 90, 110, 255)
+        btn2_border = (255, 220, 160, 255) if enough_ess2 else (120, 130, 150, 255)
+        pygame.draw.rect(surf, btn2_color, (btn2_x, btn2_y, btn2_w, btn2_h), border_radius=7)
+        pygame.draw.rect(surf, btn2_border, (btn2_x, btn2_y, btn2_w, btn2_h), 2, border_radius=7)
+        btn2_text = btn_font.render("Ул. множитель крита (15 есен.)", True, (255,255,255) if enough_ess2 else (180,180,180))
+        surf.blit(btn2_text, (btn2_x + btn2_w//2 - btn2_text.get_width()//2, btn2_y + btn2_h//2 - btn2_text.get_height()//2))
+        enough_ess3 = self.essences.get(info['type'], 0) >= 10
+        btn3_color = (100, 200, 120, 255) if enough_ess3 else (80, 90, 110, 255)
+        btn3_border = (160, 255, 160, 255) if enough_ess3 else (120, 130, 150, 255)
+        pygame.draw.rect(surf, btn3_color, (btn3_x, btn3_y, btn3_w, btn3_h), border_radius=7)
+        pygame.draw.rect(surf, btn3_border, (btn3_x, btn3_y, btn3_w, btn3_h), 2, border_radius=7)
+        btn3_text = btn_font.render("Улучшить крит (10 есен.)", True, (255,255,255) if enough_ess3 else (180,180,180))
+        surf.blit(btn3_text, (btn3_x + btn3_w//2 - btn3_text.get_width()//2, btn3_y + btn3_h//2 - btn3_text.get_height()//2))
+
+        # --- ЕСЕНЦИИ ВНИЗУ ---
+        ess_y = btn2_y + btn2_h + 18
+        ess_icon = pygame.Surface((20, 20), pygame.SRCALPHA)
+        pygame.draw.circle(ess_icon, (120, 220, 255), (10,10), 8)
+        surf.blit(ess_icon, (popup_w//2 - 60, ess_y))
+        ess_count = self.essences.get(info['type'], 0)
+        ess_text = font.render(f"Есенций: {ess_count}", True, (120, 220, 255))
+        surf.blit(ess_text, (popup_w//2 - 30, ess_y+2))
+
+        # Финальный blit окна
+        self.screen.blit(surf, (popup_x, popup_y))
+
+    def _draw_essence_tooltip(self):
+        # Показывать тултип, если мышь наведена на иконку есенций
+        if not hasattr(self, '_essence_icon_rect'):
+            return
+        mouse_pos = pygame.mouse.get_pos()
+        if not self._essence_icon_rect.collidepoint(mouse_pos):
+            return
+        # Формируем список есенций по типам
+        color_map = {
+            'red': (255, 100, 100),
+            'blue': (120, 180, 255),
+            'green': (100, 255, 100),
+            'yellow': (255, 255, 100),
+            'purple': (200, 100, 255),
+            'orange': (255, 180, 80)
+        }
+        font = pygame.font.Font(None, 22)
+        lines = []
+        for gem_type in GEM_TYPES:
+            count = self.essences.get(gem_type, 0)
+            color = color_map.get(gem_type, (120, 220, 255))
+            lines.append((f"{gem_type.capitalize()}: {count}", color))
+        width = max(font.size(line[0])[0] for line in lines) + 18
+        height = len(lines) * 24 + 10
+        surf = pygame.Surface((width, height), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (40, 40, 60, 230), surf.get_rect(), border_radius=8)
+        for i, (text, color) in enumerate(lines):
+            icon = pygame.Surface((14,14), pygame.SRCALPHA)
+            pygame.draw.circle(icon, color, (7,7), 7)
+            surf.blit(icon, (6, 8 + i*24))
+            label = font.render(text, True, color)
+            surf.blit(label, (24, 6 + i*24))
+        # Позиция тултипа — справа от иконки есенций
+        x = self._essence_icon_rect.right + 8
+        y = self._essence_icon_rect.top
+        if x + width > WINDOW_WIDTH:
+            x = self._essence_icon_rect.left - width - 8
+        if y + height > WINDOW_HEIGHT:
+            y = WINDOW_HEIGHT - height - 8
+        self.screen.blit(surf, (x, y))

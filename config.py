@@ -7,12 +7,12 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Пути к изображениям
 IMAGE_DIR = os.path.join(PROJECT_DIR, 'images')
 GEM_IMAGES = {
-    'red': os.path.join(IMAGE_DIR, 'gems', 'red.png'),
-    'blue': os.path.join(IMAGE_DIR, 'gems', 'blue.png'),
-    'green': os.path.join(IMAGE_DIR, 'gems', 'green.png'),
-    'yellow': os.path.join(IMAGE_DIR, 'gems', 'yellow.png'),
-    'purple': os.path.join(IMAGE_DIR, 'gems', 'purple.png'),
-    'cyan': os.path.join(IMAGE_DIR, 'gems', 'cyan.png')
+    'red': 'images/gems/Planets/planet00.png',
+    'blue': 'images/gems/Planets/planet01.png',
+    'green': 'images/gems/Planets/planet02.png',
+    'yellow': 'images/gems/Planets/planet03.png',
+    'purple': 'images/gems/Planets/planet04.png',
+    'orange': 'images/gems/Planets/planet05.png'
 }
 
 # Типы гемов
