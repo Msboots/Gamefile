@@ -49,6 +49,11 @@ class Shop:
         title = font.render("Магазин", True, COLORS['WHITE'])
         screen.blit(title, (self.rect.centerx - title.get_width() // 2, self.rect.top + 20))
         
+        # Отображаем текущее количество монет
+        coins_font = pygame.font.Font(None, 28)
+        coins_text = coins_font.render(f"Монеты: {self.game.coins}", True, COLORS['GOLD'])
+        screen.blit(coins_text, (self.rect.centerx - coins_text.get_width() // 2, self.rect.top + 60))
+        
         # Рисуем кнопки и информацию о бонусах
         for bonus_id, button_rect in self.buttons:
             # Переводим координаты кнопки в глобальные координаты экрана
@@ -56,8 +61,12 @@ class Shop:
             
             bonus = self.bonuses[bonus_id]
             
-            # Рисуем кнопку
-            button_color = COLORS['GRAY'] if self.selected_bonus == bonus_id else COLORS['LIGHT_GRAY']
+            # Определяем цвет кнопки: серый если нет денег, светлый если есть
+            can_afford = self.game.coins >= bonus['cost']
+            button_color = COLORS['GRAY'] if not can_afford else COLORS['LIGHT_GRAY']
+            if self.selected_bonus == bonus_id:
+                button_color = (100, 130, 180)  # Выделение выбранного бонуса
+                
             pygame.draw.rect(screen, button_color, global_button_rect)
             pygame.draw.rect(screen, COLORS['WHITE'], global_button_rect, 2)
             
@@ -77,16 +86,6 @@ class Shop:
             screen.blit(name_text, (name_x, global_button_rect.y + 10))
             screen.blit(desc_text, (desc_x, global_button_rect.y + 40))
             screen.blit(cost_text, (cost_x, global_button_rect.y + 70))
-            
-            # Показываем активный бонус
-            if bonus_id == 'damage_potion' and self.damage_bonus:
-                active_text = desc_font.render(f"Активен: {self.damage_timer} ходов", True, COLORS['GREEN'])
-                active_x = global_button_rect.centerx - active_text.get_width() // 2
-                screen.blit(active_text, (active_x, global_button_rect.y + 80))
-            elif bonus_id == 'crit_cake' and self.crit_bonus:
-                active_text = desc_font.render(f"Активен: {self.crit_timer} ходов", True, COLORS['GREEN'])
-                active_x = global_button_rect.centerx - active_text.get_width() // 2
-                screen.blit(active_text, (active_x, global_button_rect.y + 80))
 
     def handle_click(self, pos):
         if not self.visible:
@@ -113,14 +112,22 @@ class Shop:
         if self.game.coins >= bonus['cost']:
             self.game.coins -= bonus['cost']
             
+            # Определяем тип предмета на основе ID бонуса
             if bonus_id == 'damage_potion':
-                self.damage_bonus = True
-                self.damage_timer = bonus['duration']
+                item_type = 'damage_potion'
             elif bonus_id == 'crit_cake':
-                self.crit_bonus = True
-                self.crit_timer = bonus['duration']
-                
-            print(f"Куплен бонус: {bonus['name']}")
+                item_type = 'crit_potion'
+            else:
+                item_type = bonus_id  # Используем ID бонуса как тип предмета
+            
+            # Создаем предмет и добавляем в инвентарь
+            item = {'type': item_type, 'count': 1}
+            if self.game.add_to_inventory(item):
+                print(f"Куплен предмет: {bonus['name']}")
+            else:
+                # Если не удалось добавить в инвентарь (нет места), возвращаем деньги
+                self.game.coins += bonus['cost']
+                print("Инвентарь полон!")
         else:
             print("Недостаточно монет!")
 

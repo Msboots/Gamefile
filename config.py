@@ -94,6 +94,12 @@ BONUSES = {
         'description': 'Увеличивает шанс крита на 20% на 3 хода',
         'cost': 75,
         'duration': 3
+    },
+    'health_potion': {
+        'name': 'Зелье здоровья',
+        'description': 'Восстанавливает 30% здоровья',
+        'cost': 60,
+        'duration': 0
     }
 }
 
@@ -108,4 +114,43 @@ GEM_EXPERIENCE = {
 # Настройки сохранения
 SAVE_FILE = 'save.json'
 
-FIELD_INNER_PADDING = 15 
+FIELD_INNER_PADDING = 15
+
+BORDER = 14
+FIELD_OFFSET_X = GRID_OFFSET_X + BORDER
+FIELD_OFFSET_Y = GRID_OFFSET_Y + BORDER
+
+# Базовый урон
+BASE_DAMAGE = 10
+
+# Шанс критического удара
+CRIT_CHANCE = 0.1
+
+# Множитель критического удара
+CRIT_MULTIPLIER = 2.0
+
+COLORS = {
+    'WHITE': (255, 255, 255),
+    'BLACK': (0, 0, 0),
+    'RED': (255, 0, 0),
+    'GREEN': (0, 255, 0),
+    'BLUE': (0, 0, 255),
+    'YELLOW': (255, 255, 0),
+    'PURPLE': (128, 0, 128),
+    'ORANGE': (255, 165, 0),
+    'DARK_GRAY': (64, 64, 64),
+    'SHADOW': (0, 0, 0, 128),
+    'BUTTON': (45, 45, 75),
+    'BUTTON_HOVER': (65, 65, 95),
+    'GRAY': (128, 128, 128),
+    'LIGHT_GRAY': (192, 192, 192),
+    'GOLD': (255, 215, 0),
+    'CYAN': (0, 255, 255),
+    'PINK': (255, 105, 180),
+    'UI_SHADOW': (0, 0, 0, 100),
+    'UI_BG': (40, 40, 60),
+    'UI_ACCENT': (255, 255, 255, 40),
+}
+
+# Путь к файлу с NPC
+NPCS_FILE = "npcs.json" 

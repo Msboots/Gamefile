@@ -1,0 +1,17 @@
+[
+    {
+        "name": "Огненный конь",
+        "max_health": 485,
+        "image": "images/npc_g/NPC-1-1.png"
+    },
+    {
+        "name": "Космический волк",
+        "max_health": 600,
+        "image": "images/npc_g/NPC-1-2.png"
+    },
+    {
+        "name": "Туманная ведьма",
+        "max_health": 700,
+        "image": "images/npc_g/NPC-1-3.png"
+    }
+] 
